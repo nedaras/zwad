@@ -1,9 +1,17 @@
 const std = @import("std");
 
+const fs = std.fs;
+const io = std.io;
+const print = std.debug.print;
+
 const Version = extern struct {
     magic: [2]u8,
     major: u8,
     minor: u8,
+
+    fn latest() Version {
+        return .{ .magic = [_]u8{ 'R', 'W' }, .major = 3, .minor = 3 };
+    }
 };
 
 const HeaderV3 = extern struct {
@@ -26,22 +34,30 @@ const EntryV3 = packed struct {
     checksum_old: u64,
 };
 
-// ok we need to learn some zig cuz i think this is bad
+const File = std.fs.File;
 
 pub const WADFile = struct {
-    file: std.fs.File,
-    buffered_reader: std.io.BufferedReader(4096, std.fs.File.Reader),
+    file: File,
 
     pub const OpenError = error{
         InvalidVersion,
-    } || std.fs.File.OpenError;
+    };
 
     pub fn close(self: WADFile) void {
         self.file.close();
     }
 };
 
-pub fn openFile(path: []const u8) WADFile.OpenError!WADFile {
-    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-    return .{ .file = file, .buffered_reader = std.io.bufferedReader(file.reader()) };
+pub fn openFile(path: []const u8) !WADFile {
+    const file = try fs.cwd().openFile(path, .{});
+
+    var buffer_reader = io.bufferedReader(file.reader());
+    const reader = buffer_reader.reader();
+
+    const header = try reader.readStruct(HeaderV3);
+    const version = header.version;
+
+    if (!std.meta.eql(version, Version.latest())) return WADFile.OpenError.InvalidVersion;
+
+    return .{ .file = file };
 }
