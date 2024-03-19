@@ -2,8 +2,9 @@ const std = @import("std");
 
 const fs = std.fs;
 const io = std.io;
+const mem = std.mem;
 const print = std.debug.print;
-const Allocator = std.mem.Allocator;
+const Allocator = mem.Allocator;
 
 const Version = extern struct {
     magic: [2]u8,
@@ -39,8 +40,9 @@ const Reader = io.BufferedReader(4096, File.Reader); // mb we can get that usize
 
 pub const WADFile = struct {
     file: File,
-    buffer_reader: Reader,
-    header: HeaderV3,
+    allocator: Allocator,
+    buffer_reader: *Reader,
+    entries_count: u32,
 
     entry_index: u32 = 0,
 
@@ -49,7 +51,7 @@ pub const WADFile = struct {
     };
 
     pub fn next(self: *WADFile) !?EntryV3 {
-        if (self.entry_index >= self.header.entries_count) return undefined;
+        if (self.entry_index >= self.entries_count) return undefined;
 
         self.entry_index += 1;
 
@@ -60,16 +62,20 @@ pub const WADFile = struct {
     }
 
     pub fn close(self: WADFile) void {
+        self.allocator.destroy(self.buffer_reader);
         self.file.close();
     }
 };
 
-// we need an allocator
-pub fn openFile(path: []const u8) !WADFile {
+pub fn openFile(path: []const u8, allocator: Allocator) !WADFile {
     const file = try fs.cwd().openFile(path, .{ .mode = .read_write });
     errdefer file.close();
 
-    var buffer_reader = io.bufferedReader(file.reader()); // allocate on heap
+    var buffer_reader = try allocator.create(Reader);
+    errdefer allocator.destroy(buffer_reader);
+
+    buffer_reader.* = io.bufferedReader(file.reader());
+
     const reader = buffer_reader.reader();
 
     const version = try reader.readStruct(Version);
@@ -77,9 +83,11 @@ pub fn openFile(path: []const u8) !WADFile {
     if (!std.meta.eql(version, Version.latest())) return WADFile.OpenError.InvalidVersion;
 
     const header = try reader.readStruct(HeaderV3);
+
     return .{
         .file = file,
+        .allocator = allocator,
         .buffer_reader = buffer_reader,
-        .header = header,
+        .entries_count = header.entries_count,
     };
 }
