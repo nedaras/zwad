@@ -3,6 +3,7 @@ const std = @import("std");
 const fs = std.fs;
 const io = std.io;
 const print = std.debug.print;
+const Allocator = std.mem.Allocator;
 
 const Version = extern struct {
     magic: [2]u8,
@@ -63,6 +64,7 @@ pub const WADFile = struct {
     }
 };
 
+// we need an allocator
 pub fn openFile(path: []const u8) !WADFile {
     const file = try fs.cwd().openFile(path, .{ .mode = .read_write });
     errdefer file.close();
