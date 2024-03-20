@@ -36,7 +36,7 @@ const EntryV3 = packed struct {
 };
 
 const File = fs.File;
-const Reader = io.BufferedReader(4096, File.Reader); // mb we can get that usize some diffrent way
+const Reader = io.BufferedReader(4096, File.Reader); // comptime the size mb
 
 pub const WADFile = struct {
     file: File,
@@ -45,13 +45,14 @@ pub const WADFile = struct {
     entries_count: u32,
 
     entry_index: u32 = 0,
+    hash_maps: std.AutoHashMapUnmanaged(u8, []u8) = .{},
 
     pub const OpenError = error{
         InvalidVersion,
     };
 
     pub fn next(self: *WADFile) !?EntryV3 {
-        if (self.entry_index >= self.entries_count) return undefined;
+        if (self.entry_index >= self.entries_count) return null;
 
         self.entry_index += 1;
 
@@ -59,6 +60,18 @@ pub const WADFile = struct {
         // it is soo i guess it better to have reader class
         const reader = self.buffer_reader.reader();
         return try reader.readStruct(EntryV3);
+    }
+
+    pub fn getBuffer(self: *WADFile, entry: EntryV3) ![]u8 {
+        var buffer = try self.allocator.alloc(u8, entry.size_compressed);
+
+        const pos = try self.file.getPos();
+        try self.file.seekTo(entry.offset);
+
+        _ = try self.buffer_reader.reader().read(buffer);
+        try self.file.seekTo(pos);
+
+        return buffer;
     }
 
     pub fn close(self: WADFile) void {

@@ -15,6 +15,69 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const zstd = b.addStaticLibrary(.{
+        .name = "zstd",
+        .target = target,
+        .optimize = optimize,
+    });
+
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/decompress" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/dictBuilder" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/deprecated" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/common" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/legacy" });
+    zstd.addIncludePath(.{ .path = "includes/zstd/lib/compress" });
+
+    const flags = [_][]const u8{};
+
+    zstd.addCSourceFiles(&.{
+        "includes/zstd/lib/decompress/zstd_decompress_block.c",
+        "includes/zstd/lib/decompress/huf_decompress.c",
+        "includes/zstd/lib/decompress/huf_decompress_amd64.S",
+        "includes/zstd/lib/decompress/zstd_ddict.c",
+        "includes/zstd/lib/decompress/zstd_decompress.c",
+        "includes/zstd/lib/dictBuilder/divsufsort.c",
+        "includes/zstd/lib/dictBuilder/zdict.c",
+        "includes/zstd/lib/dictBuilder/cover.c",
+        "includes/zstd/lib/dictBuilder/fastcover.c",
+        "includes/zstd/lib/deprecated/zbuff_common.c",
+        "includes/zstd/lib/deprecated/zbuff_compress.c",
+        "includes/zstd/lib/deprecated/zbuff_decompress.c",
+        "includes/zstd/lib/common/xxhash.c",
+        "includes/zstd/lib/common/pool.c",
+        "includes/zstd/lib/common/error_private.c",
+        "includes/zstd/lib/common/debug.c",
+        "includes/zstd/lib/common/fse_decompress.c",
+        "includes/zstd/lib/common/zstd_common.c",
+        "includes/zstd/lib/common/entropy_common.c",
+        "includes/zstd/lib/common/threading.c",
+        "includes/zstd/lib/legacy/zstd_v02.c",
+        "includes/zstd/lib/legacy/zstd_v06.c",
+        "includes/zstd/lib/legacy/zstd_v03.c",
+        "includes/zstd/lib/legacy/zstd_v05.c",
+        "includes/zstd/lib/legacy/zstd_v01.c",
+        "includes/zstd/lib/legacy/zstd_v04.c",
+        "includes/zstd/lib/legacy/zstd_v07.c",
+        "includes/zstd/lib/compress/zstd_ldm.c",
+        "includes/zstd/lib/compress/zstd_lazy.c",
+        "includes/zstd/lib/compress/zstd_fast.c",
+        "includes/zstd/lib/compress/zstd_compress.c",
+        "includes/zstd/lib/compress/huf_compress.c",
+        "includes/zstd/lib/compress/zstd_compress_sequences.c",
+        "includes/zstd/lib/compress/fse_compress.c",
+        "includes/zstd/lib/compress/hist.c",
+        "includes/zstd/lib/compress/zstd_compress_literals.c",
+        "includes/zstd/lib/compress/zstdmt_compress.c",
+        "includes/zstd/lib/compress/zstd_double_fast.c",
+        "includes/zstd/lib/compress/zstd_opt.c",
+        "includes/zstd/lib/compress/zstd_compress_superblock.c",
+    }, &flags);
+
+    zstd.linkLibC();
+
+    b.installArtifact(zstd);
+
     const exe = b.addExecutable(.{
         .name = "zig",
         // In this case the main source file is merely a path, however, in more
@@ -23,6 +86,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    exe.linkLibrary(zstd);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
