@@ -26,8 +26,8 @@ const HeaderV3 = extern struct {
 const EntryV3 = packed struct {
     hash: u64,
     offset: u32,
-    size: u32,
     size_compressed: u32,
+    size_decompressed: u32,
     type: u4,
     subchunk_count: u4,
     is_duplicate: u8,
@@ -68,7 +68,9 @@ pub const WADFile = struct {
         const pos = try self.file.getPos();
         try self.file.seekTo(entry.offset);
 
-        _ = try self.buffer_reader.reader().read(buffer);
+        // wait some reason the file reader works and not buffered_reader
+        const read = try self.file.reader().read(buffer);
+        print("read: {}\n", .{read});
         try self.file.seekTo(pos);
 
         return buffer;
