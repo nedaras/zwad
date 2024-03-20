@@ -5,6 +5,7 @@ const io = std.io;
 const mem = std.mem;
 const print = std.debug.print;
 const Allocator = mem.Allocator;
+const File = fs.File;
 
 const Version = extern struct {
     magic: [2]u8,
@@ -35,13 +36,8 @@ const EntryV3 = packed struct {
     checksum_old: u64,
 };
 
-const File = fs.File;
-const Reader = io.BufferedReader(4096, File.Reader); // comptime the size mb
-
 pub const WADFile = struct {
     file: File,
-    allocator: Allocator,
-    buffer_reader: *Reader,
     entries_count: u32,
 
     entry_index: u32 = 0,
@@ -58,40 +54,40 @@ pub const WADFile = struct {
 
         // is reader like a ptr or struct?
         // it is soo i guess it better to have reader class
-        const reader = self.buffer_reader.reader();
+        const reader = self.file.reader();
         return try reader.readStruct(EntryV3);
     }
 
-    pub fn getBuffer(self: *WADFile, entry: EntryV3) ![]u8 {
-        var buffer = try self.allocator.alloc(u8, entry.size_compressed);
+    // aaa it has to be comptime, bad idea we have here
+    pub fn getBuffer(self: *WADFile, entry: EntryV3) type {
+        _ = self;
+        return struct {
+            const Self = @This();
 
-        const pos = try self.file.getPos();
-        try self.file.seekTo(entry.offset);
+            allocator: Allocator,
+            buffer: []u8,
 
-        // wait some reason the file reader works and not buffered_reader
-        const read = try self.file.reader().read(buffer);
-        print("read: {}\n", .{read});
-        try self.file.seekTo(pos);
+            pub fn init(allocator: Allocator) !Self {
+                var buffer = try allocator.alloc(u8, entry.size_compressed);
+                return .{ .allocator = allocator, .buffer = buffer };
+            }
 
-        return buffer;
+            pub fn deinit(selff: Self) void {
+                selff.allocator.free(selff.buffer);
+            }
+        };
     }
 
     pub fn close(self: WADFile) void {
-        self.allocator.destroy(self.buffer_reader);
         self.file.close();
     }
 };
 
-pub fn openFile(path: []const u8, allocator: Allocator) !WADFile {
+pub fn openFile(path: []const u8) !WADFile {
     const file = try fs.cwd().openFile(path, .{ .mode = .read_write });
     errdefer file.close();
 
-    var buffer_reader = try allocator.create(Reader);
-    errdefer allocator.destroy(buffer_reader);
-
-    buffer_reader.* = io.bufferedReader(file.reader());
-
-    const reader = buffer_reader.reader();
+    const reader = file.reader(); // we can read ver and head with one sys call
 
     const version = try reader.readStruct(Version);
 
@@ -101,8 +97,6 @@ pub fn openFile(path: []const u8, allocator: Allocator) !WADFile {
 
     return .{
         .file = file,
-        .allocator = allocator,
-        .buffer_reader = buffer_reader,
         .entries_count = header.entries_count,
     };
 }
