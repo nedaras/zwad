@@ -52,6 +52,8 @@ pub const WADFile = struct {
 
     pub const DecompressError = error{
         InvalidEntry,
+        InvalidEntryType,
+        InvalidEntrySize,
     } || Allocator.Error || File.ReadError || File.SeekError || File.GetSeekPosError;
 
     pub fn next(self: *WADFile) !?EntryV3 {
@@ -59,29 +61,42 @@ pub const WADFile = struct {
 
         self.entry_index += 1;
 
-        // is reader like a ptr or struct?
-        // it is soo i guess it better to have reader class
         const reader = self.file.reader();
         return try reader.readStruct(EntryV3);
     }
 
+    fn fillBuffer(self: WADFile, buffer: []u8, offset: u32) !void {
+        const pos = try self.file.getPos();
+        try self.file.seekTo(offset);
+
+        _ = try self.file.read(buffer);
+
+        try self.file.seekTo(pos);
+    }
+
+    // well multithreading would be cool
     pub fn decompressEntry(self: WADFile, entry: EntryV3, allocator: Allocator) DecompressError![]u8 {
         var out = try allocator.alloc(u8, entry.size_decompressed);
         errdefer allocator.free(out);
 
-        var src = try allocator.alloc(u8, entry.size_compressed);
-        defer allocator.free(src);
+        switch (entry.type) {
+            0 => {
+                if (entry.size_compressed != entry.size_decompressed) return WADFile.DecompressError.InvalidEntrySize;
 
-        const pos = try self.file.getPos();
-        try self.file.seekTo(entry.offset);
+                try self.fillBuffer(out, entry.offset);
+                return out;
+            },
+            3 => {
+                var src = try allocator.alloc(u8, entry.size_compressed);
+                defer allocator.free(src);
 
-        _ = try self.file.read(src);
+                try self.fillBuffer(src, entry.offset);
 
-        try self.file.seekTo(pos);
-
-        const bytes = ZSTD_decompress(out.ptr, entry.size_decompressed, src.ptr, entry.size_compressed);
-
-        if (ZSTD_isError(bytes)) return WADFile.DecompressError.InvalidEntry;
+                const bytes = ZSTD_decompress(out.ptr, entry.size_decompressed, src.ptr, entry.size_compressed);
+                if (ZSTD_isError(bytes)) return WADFile.DecompressError.InvalidEntry;
+            },
+            else => return WADFile.DecompressError.InvalidEntryType,
+        }
 
         return out;
     }

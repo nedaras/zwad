@@ -1,6 +1,8 @@
 const std = @import("std");
 const wad = @import("wad.zig");
 
+const fs = std.fs;
+const fmt = std.fmt;
 const print = std.debug.print;
 
 pub fn main() !void {
@@ -13,11 +15,18 @@ pub fn main() !void {
     var wad_file = try wad.openFile("Aatrox.wad.client");
     defer wad_file.close();
 
-    if (try wad_file.next()) |entry| {
-        const buffa = try wad_file.decompressEntry(entry, allocator);
-        defer allocator.free(buffa);
+    _ = try fs.cwd().makeDir("out");
 
-        _ = try std.fs.cwd().writeFile("out.dds", buffa);
+    while (try wad_file.next()) |entry| {
+        const data = try wad_file.decompressEntry(entry, allocator);
+        defer allocator.free(data);
+
+        const file_name = try fmt.allocPrint(allocator, "out/{d}", .{entry.hash});
+        defer allocator.free(file_name);
+
+        _ = try fs.cwd().writeFile(file_name, data);
+
+        print("name: {s}\n", .{file_name});
     }
 
     print("sizeof WADFile: {}\n", .{@sizeOf(@TypeOf(wad_file))});
