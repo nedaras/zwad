@@ -1,5 +1,9 @@
 const std = @import("std");
 
+extern fn ZSTD_decompress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize) usize;
+extern fn ZSTD_getErrorName(code: usize) [*c]const u8;
+extern fn ZSTD_isError(code: usize) bool;
+
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -41,11 +45,14 @@ pub const WADFile = struct {
     entries_count: u32,
 
     entry_index: u32 = 0,
-    hash_maps: std.AutoHashMapUnmanaged(u8, []u8) = .{},
 
     pub const OpenError = error{
         InvalidVersion,
-    };
+    } || File.OpenError;
+
+    pub const DecompressError = error{
+        InvalidEntry,
+    } || Allocator.Error || File.ReadError || File.SeekError || File.GetSeekPosError;
 
     pub fn next(self: *WADFile) !?EntryV3 {
         if (self.entry_index >= self.entries_count) return null;
@@ -58,24 +65,25 @@ pub const WADFile = struct {
         return try reader.readStruct(EntryV3);
     }
 
-    // aaa it has to be comptime, bad idea we have here
-    pub fn getBuffer(self: *WADFile, entry: EntryV3) type {
-        _ = self;
-        return struct {
-            const Self = @This();
+    pub fn decompressEntry(self: WADFile, entry: EntryV3, allocator: Allocator) DecompressError![]u8 {
+        var out = try allocator.alloc(u8, entry.size_decompressed);
+        errdefer allocator.free(out);
 
-            allocator: Allocator,
-            buffer: []u8,
+        var src = try allocator.alloc(u8, entry.size_compressed);
+        defer allocator.free(src);
 
-            pub fn init(allocator: Allocator) !Self {
-                var buffer = try allocator.alloc(u8, entry.size_compressed);
-                return .{ .allocator = allocator, .buffer = buffer };
-            }
+        const pos = try self.file.getPos();
+        try self.file.seekTo(entry.offset);
 
-            pub fn deinit(selff: Self) void {
-                selff.allocator.free(selff.buffer);
-            }
-        };
+        _ = try self.file.read(src);
+
+        try self.file.seekTo(pos);
+
+        const bytes = ZSTD_decompress(out.ptr, entry.size_decompressed, src.ptr, entry.size_compressed);
+
+        if (ZSTD_isError(bytes)) return WADFile.DecompressError.InvalidEntry;
+
+        return out;
     }
 
     pub fn close(self: WADFile) void {
