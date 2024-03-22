@@ -36,17 +36,47 @@ fn getNode(node: *Node, value: []const u8) ?*Node {
     return null;
 }
 
+fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
+    var node = try self.allocator.create(Node);
+    node.* = .{
+        .parent = parent,
+        .childs = ArrayListUnmanaged(*Node){},
+        .value = try self.allocator.dupe(u8, value),
+    };
+
+    try parent.childs.append(self.allocator, node);
+    return parent.childs.getLast();
+}
+
 pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
     var it = mem.split(u8, path, "/");
     var node = &self.head;
 
     while (it.next()) |dir| {
-        print("hash: {}, allocated: {}\n", .{ hash, (getNode(node, dir) == null) });
+        if (getNode(node, dir)) |n| {
+            print("hash: {}, allocated: false\n", .{hash});
+            node = n;
+            continue;
+        }
+
+        node = try pushNode(self, node, dir);
+
+        print("hash: {}, allocated: true\n", .{hash});
     }
 }
 
-pub fn deinit(self: PathThree) void {
-    _ = self;
+fn deinitNodes(allocator: Allocator, node: *Node) void {
+    for (node.childs.items) |item| {
+        deinitNodes(allocator, item);
+        allocator.free(item.value);
+        allocator.destroy(item);
+    }
+
+    node.childs.deinit(allocator);
+}
+
+pub fn deinit(self: *PathThree) void {
+    deinitNodes(self.allocator, &self.head);
 }
 
 test "testing path three" {
@@ -60,6 +90,7 @@ test "testing path three" {
         "ddf/hhl/f",
         "ddf/ddf/g",
         "ux/cbd/a",
+        "abc/hhl/cbd/x",
     };
 
     var three = PathThree.init(allocator);
