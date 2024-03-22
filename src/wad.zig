@@ -125,14 +125,17 @@ pub fn openFile(path: []const u8) !WADFile {
 }
 
 pub fn importHashes(allocator: Allocator, path: []const u8) !void {
+    _ = allocator;
     const file = try fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var buffered_reader = io.bufferedReader(file.reader());
+    var buffered_reader = io.bufferedReaderSize(0x10000, file.reader());
     const reader = buffered_reader.reader();
 
-    while (try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 42069)) |data| {
-        defer allocator.free(data);
+    var buffer: [1028 * 8]u8 = undefined;
+    while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
+        // we dont want to use allocator, why cuz shit it like 10x slower and the fact we're using gpa
+        //defer allocator.free(data);
         print("- {s}\n", .{data});
     }
 }
