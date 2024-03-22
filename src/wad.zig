@@ -75,7 +75,7 @@ pub const WADFile = struct {
     }
 
     // well multithreading would be cool
-    pub fn decompressEntry(self: WADFile, entry: EntryV3, allocator: Allocator) DecompressError![]u8 {
+    pub fn decompressEntry(self: WADFile, allocator: Allocator, entry: EntryV3) DecompressError![]u8 {
         var out = try allocator.alloc(u8, entry.size_decompressed);
         errdefer allocator.free(out);
 
@@ -122,4 +122,17 @@ pub fn openFile(path: []const u8) !WADFile {
         .file = file,
         .entries_count = header.entries_count,
     };
+}
+
+pub fn importHashes(allocator: Allocator, path: []const u8) !void {
+    const file = try fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var buffered_reader = io.bufferedReader(file.reader());
+    const reader = buffered_reader.reader();
+
+    while (try reader.readUntilDelimiterOrEofAlloc(allocator, '\n', 42069)) |data| {
+        defer allocator.free(data);
+        print("- {s}\n", .{data});
+    }
 }

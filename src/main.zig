@@ -11,14 +11,18 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
+    try wad.importHashes(allocator, "hashes.txt");
+
     // it would be nice to know should o have like init deinit functions, like idk todo zig way
     var wad_file = try wad.openFile("Aatrox.wad.client");
     defer wad_file.close();
 
-    _ = try fs.cwd().makeDir("out");
+    fs.cwd().makeDir("out") catch {
+        return;
+    };
 
     while (try wad_file.next()) |entry| {
-        const data = try wad_file.decompressEntry(entry, allocator);
+        const data = try wad_file.decompressEntry(allocator, entry);
         defer allocator.free(data);
 
         const file_name = try fmt.allocPrint(allocator, "out/{d}", .{entry.hash});
