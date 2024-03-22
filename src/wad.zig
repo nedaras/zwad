@@ -1,4 +1,5 @@
 const std = @import("std");
+const PathThree = @import("PathThree.zig");
 
 extern fn ZSTD_decompress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize) usize;
 extern fn ZSTD_getErrorName(code: usize) [*c]const u8;
@@ -124,18 +125,31 @@ pub fn openFile(path: []const u8) !WADFile {
     };
 }
 
+// we still need to reduce allocations
+// btw three.deinit takes fucking time too, we prob would want arena allocator for that
+
+// c_allocator ~ 30s (deinit was instant btw),
+// gpa ~ 120s,
+// page_allocator ~ 130s
+// arena (page_allocator) ~ 130s (deinit was rly fast)
+// arena (c_allocator) ~ 130s (deinit was slower then just c_alocator)
+//
+// so its best to use c_allocator or arena if we like care for safety but we want to be fast with our deinits
 pub fn importHashes(allocator: Allocator, path: []const u8) !void {
-    _ = allocator;
     const file = try fs.cwd().openFile(path, .{});
     defer file.close();
 
     var buffered_reader = io.bufferedReaderSize(0x10000, file.reader());
     const reader = buffered_reader.reader();
 
+    var three = PathThree.init(allocator);
+    defer three.deinit(); // make the caller deinit, cuz mb they want to use arena allocator
+
     var buffer: [1028 * 8]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
-        // we dont want to use allocator, why cuz shit it like 10x slower and the fact we're using gpa
-        //defer allocator.free(data);
-        print("- {s}\n", .{data});
+        const file_path = data[16 + 1 ..];
+
+        try three.addPath(file_path, 69);
+        print("{s}\n", .{file_path});
     }
 }

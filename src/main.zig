@@ -1,5 +1,6 @@
 const std = @import("std");
 const wad = @import("wad.zig");
+const PathThree = @import("PathThree.zig");
 
 const fs = std.fs;
 const fmt = std.fmt;

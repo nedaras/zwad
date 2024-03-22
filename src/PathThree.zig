@@ -2,7 +2,6 @@ const std = @import("std");
 
 const mem = std.mem;
 const testing = std.testing;
-const expect = testing.expect;
 const print = std.debug.print;
 
 const PathThree = @This();
@@ -17,6 +16,8 @@ const Node = struct {
 
 allocator: Allocator,
 head: Node,
+
+size: usize = 0,
 
 pub fn init(allocator: Allocator) PathThree {
     const head: Node = .{
@@ -49,19 +50,18 @@ fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
 }
 
 pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
+    _ = hash;
+
     var it = mem.split(u8, path, "/");
     var node = &self.head;
 
     while (it.next()) |dir| {
-        if (getNode(node, dir)) |n| {
-            print("hash: {}, allocated: false\n", .{hash});
-            node = n;
+        if (getNode(node, dir)) |next| {
+            node = next;
             continue;
         }
 
         node = try pushNode(self, node, dir);
-
-        print("hash: {}, allocated: true\n", .{hash});
     }
 }
 
@@ -99,6 +99,4 @@ test "testing path three" {
     for (0.., paths) |i, path| {
         try three.addPath(path, i);
     }
-
-    try expect(true);
 }
