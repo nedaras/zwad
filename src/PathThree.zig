@@ -7,6 +7,7 @@ const print = std.debug.print;
 const PathThree = @This();
 const Allocator = std.mem.Allocator;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 
 const Node = struct {
     parent: ?*Node,
@@ -17,6 +18,7 @@ const Node = struct {
 allocator: Allocator,
 head: Node,
 
+entires: AutoHashMapUnmanaged(u64, *Node) = AutoHashMapUnmanaged(u64, *Node){},
 size: usize = 0,
 
 pub fn init(allocator: Allocator) PathThree {
@@ -39,8 +41,10 @@ fn getNode(node: *Node, value: []const u8) ?*Node {
 
 fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
     var node = try self.allocator.create(Node);
+    const parent_node = if (parent == &self.head) null else parent;
+
     node.* = .{
-        .parent = parent,
+        .parent = parent_node,
         .childs = ArrayListUnmanaged(*Node){},
         .value = try self.allocator.dupe(u8, value),
     };
@@ -50,12 +54,11 @@ fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
 }
 
 pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
-    _ = hash;
-
     var it = mem.split(u8, path, "/");
     var node = &self.head;
 
     while (it.next()) |dir| {
+        if (dir.len == 0) continue;
         if (getNode(node, dir)) |next| {
             node = next;
             continue;
@@ -63,6 +66,40 @@ pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
 
         node = try pushNode(self, node, dir);
     }
+
+    try self.entires.put(self.allocator, hash, node);
+}
+
+pub fn getPath(self: PathThree, hash: u64) !?[]u8 {
+    var stack = ArrayListUnmanaged([]u8){};
+    var stack_size: usize = 0;
+
+    defer stack.deinit(self.allocator);
+
+    var current = self.entires.get(hash);
+    if (current == null) return null;
+
+    while (current) |node| {
+        try stack.append(self.allocator, node.value);
+        stack_size += node.value.len;
+        current = node.parent;
+    }
+
+    var out = try self.allocator.alloc(u8, stack_size + stack.items.len - 1);
+
+    var i = stack.items.len;
+    var filled_i: usize = 0;
+
+    while (i >= 1) : (i -= 1) {
+        const item = stack.items[i - 1];
+
+        mem.copy(u8, out[filled_i..], item);
+        if (i != 1) out[filled_i + item.len] = '/';
+
+        filled_i += item.len + 1;
+    }
+
+    return out;
 }
 
 fn deinitNodes(allocator: Allocator, node: *Node) void {
@@ -76,6 +113,7 @@ fn deinitNodes(allocator: Allocator, node: *Node) void {
 }
 
 pub fn deinit(self: *PathThree) void {
+    self.entires.deinit(self.allocator);
     deinitNodes(self.allocator, &self.head);
 }
 
@@ -98,5 +136,15 @@ test "testing path three" {
 
     for (0.., paths) |i, path| {
         try three.addPath(path, i);
+    }
+
+    for (0..paths.len) |i| {
+        if (try three.getPath(i)) |path| {
+            try testing.expectEqualStrings(paths[i], path);
+            defer allocator.free(path);
+            continue;
+        }
+
+        try testing.expect(false);
     }
 }

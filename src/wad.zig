@@ -135,7 +135,7 @@ pub fn openFile(path: []const u8) !WADFile {
 // arena (c_allocator) ~ 130s (deinit was slower then just c_alocator)
 //
 // so its best to use c_allocator or arena if we like care for safety but we want to be fast with our deinits
-pub fn importHashes(allocator: Allocator, path: []const u8) !void {
+pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     const file = try fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -143,7 +143,7 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !void {
     const reader = buffered_reader.reader();
 
     var three = PathThree.init(allocator);
-    defer three.deinit(); // make the caller deinit, cuz mb they want to use arena allocator
+    errdefer three.deinit();
 
     var buffer: [1028 * 8]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {

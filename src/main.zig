@@ -12,7 +12,8 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    try wad.importHashes(allocator, "hashes.txt");
+    const hashes = try wad.importHashes(allocator, "hashes.txt");
+    defer hashes.deinit();
 
     // it would be nice to know should o have like init deinit functions, like idk todo zig way
     var wad_file = try wad.openFile("Aatrox.wad.client");
