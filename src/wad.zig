@@ -145,7 +145,7 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     var three = PathThree.init(allocator);
     errdefer three.deinit();
 
-    var buffer: [1028 * 8]u8 = undefined;
+    var buffer: [1024 * 1024]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
         const hex_hash = data[0..16];
         const file_path = data[16 + 1 ..];
