@@ -8,6 +8,7 @@ extern fn ZSTD_isError(code: usize) bool;
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
+const fmt = std.fmt;
 const print = std.debug.print;
 const Allocator = mem.Allocator;
 const File = fs.File;
@@ -125,35 +126,71 @@ pub fn openFile(path: []const u8) !WADFile {
     };
 }
 
-// we still need to reduce allocations
-// btw three.deinit takes fucking time too, we prob would want arena allocator for that
-
-// c_allocator ~ 30s (deinit was instant btw),
-// gpa ~ 120s,
-// page_allocator ~ 130s
-// arena (page_allocator) ~ 130s (deinit was rly fast)
-// arena (c_allocator) ~ 130s (deinit was slower then just c_alocator)
-//
-// so its best to use c_allocator or arena if we like care for safety but we want to be fast with our deinits
 pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     const file = try fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var buffered_reader = io.bufferedReaderSize(0x10000, file.reader());
+    var buffered_reader = io.bufferedReaderSize(1024 * 1024, file.reader());
     const reader = buffered_reader.reader();
 
     var three = PathThree.init(allocator);
     errdefer three.deinit();
 
-    var buffer: [1024 * 1024]u8 = undefined;
+    var buffer: [1024 * 8]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
         const hex_hash = data[0..16];
         const file_path = data[16 + 1 ..];
 
         const hash = try std.fmt.parseInt(u64, hex_hash, 16);
 
-        try three.addPath(file_path, hash);
+        try three.addFile(file_path, hash);
     }
 
     return three;
+}
+
+fn makeFile(path: []const u8, hash: u64, data: []const u8) !void {
+    var i: usize = path.len;
+    while (i > 0) : (i -= 1) {
+        if (path[i - 1] == '/') break;
+    }
+
+    try fs.cwd().makePath(path[0..i]);
+    fs.cwd().writeFile(path, data) catch |err| {
+        if (err != error.NameTooLong) return err;
+
+        var buffer: [fs.MAX_PATH_BYTES]u8 = undefined;
+        const file_path = try fmt.bufPrint(&buffer, "{s}/{d}", .{ path[0..i], hash });
+
+        try fs.cwd().writeFile(file_path, data);
+    };
+}
+
+pub fn extractWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: PathThree) !void {
+    var wad_file = try openFile(wad);
+    defer wad_file.close();
+
+    while (try wad_file.next()) |entry| {
+        const data = try wad_file.decompressEntry(allocator, entry);
+        defer allocator.free(data);
+
+        // remove alloc print for these print functions, and only put the hash if out of mem error
+        const file_name = try hashes.getFile(allocator, entry.hash);
+
+        if (file_name) |file| {
+            defer allocator.free(file);
+
+            const path = try fmt.allocPrint(allocator, "{s}//{s}", .{ out, file });
+            defer allocator.free(path);
+
+            try makeFile(path, entry.hash, data);
+
+            continue;
+        }
+
+        const path = try fmt.allocPrint(allocator, "{s}/{d}", .{ out, entry.hash });
+        defer allocator.free(path);
+
+        try makeFile(path, entry.hash, data);
+    }
 }

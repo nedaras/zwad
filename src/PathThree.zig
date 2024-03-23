@@ -53,7 +53,7 @@ fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
     return parent.childs.getLast();
 }
 
-pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
+pub fn addFile(self: *PathThree, path: []const u8, hash: u64) !void {
     if (self.entires.contains(hash)) {
         const AddPathError = error{HashAlreadyInUse};
         return AddPathError.HashAlreadyInUse;
@@ -75,22 +75,22 @@ pub fn addPath(self: *PathThree, path: []const u8, hash: u64) !void {
     try self.entires.put(self.allocator, hash, node);
 }
 
-pub fn getPath(self: PathThree, hash: u64) !?[]u8 {
+pub fn getFile(self: PathThree, allocator: Allocator, hash: u64) !?[]u8 {
     var stack = ArrayListUnmanaged([]u8){};
     var stack_size: usize = 0;
 
-    defer stack.deinit(self.allocator);
+    defer stack.deinit(allocator);
 
     var current = self.entires.get(hash);
     if (current == null) return null;
 
     while (current) |node| {
-        try stack.append(self.allocator, node.value);
+        try stack.append(allocator, node.value);
         stack_size += node.value.len;
         current = node.parent;
     }
 
-    var out = try self.allocator.alloc(u8, stack_size + stack.items.len - 1);
+    var out = try allocator.alloc(u8, stack_size + stack.items.len - 1);
 
     var i = stack.items.len;
     var filled_i: usize = 0;
@@ -140,11 +140,11 @@ test "testing path three" {
     defer three.deinit();
 
     for (0.., paths) |i, path| {
-        try three.addPath(path, i);
+        try three.addFile(path, i);
     }
 
     for (0..paths.len) |i| {
-        if (try three.getPath(i)) |path| {
+        if (try three.getFile(i)) |path| {
             try testing.expectEqualStrings(paths[i], path);
             defer allocator.free(path);
             continue;
