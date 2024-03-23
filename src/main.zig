@@ -62,7 +62,11 @@ pub fn main() !void {
             defer allocator.free(file_name);
 
             try createDirs(file_name);
+
+            print("name: |||{s}|||\n", .{file_name});
+
             fs.cwd().writeFile(file_name, data) catch |e| {
+                // on widnows we dont get this error we just crash
                 if (e == error.NameTooLong) {
                     print("oh no file toolong\n", .{});
 
