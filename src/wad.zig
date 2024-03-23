@@ -147,9 +147,13 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
 
     var buffer: [1028 * 8]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
+        const hex_hash = data[0..16];
         const file_path = data[16 + 1 ..];
 
-        try three.addPath(file_path, 69);
-        print("{s}\n", .{file_path});
+        const hash = try std.fmt.parseInt(u64, hex_hash, 16);
+
+        try three.addPath(file_path, hash);
     }
+
+    return three;
 }
