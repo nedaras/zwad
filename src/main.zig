@@ -61,11 +61,10 @@ pub fn main() !void {
             const file_name = try fmt.allocPrint(allocator, "out/{s}", .{path});
             defer allocator.free(file_name);
 
-            print("name: {s}\n", .{file_name});
-
             try createDirs(file_name);
             fs.cwd().writeFile(file_name, data) catch |e| {
                 if (e == error.NameTooLong) {
+                    print("oh no file toolong\n", .{});
 
                     // put that hash inside the dir not in out
                     const file_name_2 = try fmt.allocPrint(allocator, "out/{d}", .{entry.hash});
@@ -73,10 +72,13 @@ pub fn main() !void {
 
                     _ = try fs.cwd().writeFile(file_name_2, data);
                     print("name: {s}\n", .{file_name_2});
+                    continue;
                 } else {
                     return e;
                 }
             };
+
+            print("name: {s}\n", .{file_name});
 
             continue;
         }
