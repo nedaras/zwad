@@ -2,6 +2,7 @@ const std = @import("std");
 const PathThree = @import("PathThree.zig");
 
 extern fn ZSTD_decompress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize) usize;
+extern fn ZSTD_compress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize, compression_level: c_int) usize;
 extern fn ZSTD_getErrorName(code: usize) [*c]const u8;
 extern fn ZSTD_isError(code: usize) bool;
 extern fn ZSTD_XXH64(input: *const anyopaque, length: usize, seed: u64) u64;
@@ -31,12 +32,14 @@ const HeaderV3 = extern struct {
     entries_count: u32,
 };
 
+const EntryType = enum(u4) { raw, link, gzip, zstd, zstd_multi };
+
 const EntryV3 = packed struct {
     hash: u64,
     offset: u32,
     size_compressed: u32,
     size_decompressed: u32,
-    type: u4,
+    type: EntryType,
     subchunk_count: u4,
     is_duplicate: u8,
     subchunk_index: u16,
@@ -83,13 +86,13 @@ pub const WADFile = struct {
         errdefer allocator.free(out);
 
         switch (entry.type) {
-            0 => {
+            EntryType.raw => {
                 if (entry.size_compressed != entry.size_decompressed) return WADFile.DecompressError.InvalidEntrySize;
 
                 try self.fillBuffer(out, entry.offset);
                 return out;
             },
-            3 => {
+            EntryType.zstd => {
                 var src = try allocator.alloc(u8, entry.size_compressed);
                 defer allocator.free(src);
 
@@ -219,17 +222,40 @@ pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: [
     var entries = std.ArrayList(EntryV3).init(allocator);
     defer entries.deinit();
 
-    var it_dir = try fs.cwd().openIterableDir(wad, .{});
+    const it_dir = try fs.cwd().openIterableDir(wad, .{});
     var iter = try it_dir.walk(allocator);
     defer iter.deinit();
 
+    var hashes_file = try fs.cwd().createFile(hashes, .{});
+    var buffered_writer = io.bufferedWriter(hashes_file.writer());
+    const writer = buffered_writer.writer();
+
+    defer hashes_file.close();
+
+    var buffer: [16 + 1 + fs.MAX_PATH_BYTES + 1]u8 = undefined;
+
     while (try iter.next()) |entry| {
         if (entry.kind == .directory) continue;
-        const hash = try getFilesHash(entry.path, entry.basename);
 
-        print("{d}\n", .{hash});
+        const hash = try getFilesHash(entry.path, entry.basename);
+        const line = try fmt.bufPrint(&buffer, "{x:0>16} {s}\n", .{ hash, entry.path });
+
+        if (!isHashedFile(entry.basename)) _ = try writer.write(line);
+
+        const wad_entry: EntryV3 = .{
+            .hash = hash,
+            .offset = 0,
+            .size_compressed = 0,
+            .size_decompressed = 0,
+            .type = EntryType.zstd,
+            .subchunk_count = 0,
+            .is_duplicate = 0,
+            .subchunk_index = 0,
+            .checksum_old = 0,
+        };
+
+        try entries.append(wad_entry);
     }
 
-    _ = hashes;
     _ = out;
 }
