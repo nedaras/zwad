@@ -222,11 +222,11 @@ pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: [
     var entries = std.ArrayList(EntryV3).init(allocator);
     defer entries.deinit();
 
-    const it_dir = try fs.cwd().openIterableDir(wad, .{});
-    var iter = try it_dir.walk(allocator);
+    var iter = try (try fs.cwd().openIterableDir(wad, .{})).walk(allocator);
     defer iter.deinit();
 
-    var hashes_file = try fs.cwd().createFile(hashes, .{});
+    const hashes_file = try fs.cwd().createFile(hashes, .{});
+
     var buffered_writer = io.bufferedWriter(hashes_file.writer());
     const writer = buffered_writer.writer();
 
@@ -238,15 +238,39 @@ pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: [
         if (entry.kind == .directory) continue;
 
         const hash = try getFilesHash(entry.path, entry.basename);
-        const line = try fmt.bufPrint(&buffer, "{x:0>16} {s}\n", .{ hash, entry.path });
 
-        if (!isHashedFile(entry.basename)) _ = try writer.write(line);
+        if (!isHashedFile(entry.basename)) {
+            const line = try fmt.bufPrint(&buffer, "{x:0>16} {s}\n", .{ hash, entry.path });
+            _ = try writer.write(line);
+        }
+
+        const entry_file = try entry.dir.openFile(entry.basename, .{});
+        defer entry_file.close();
+
+        const size_decompressed = try entry_file.getEndPos();
+
+        var data = try allocator.alloc(u8, size_decompressed);
+        defer allocator.free(data);
+
+        var dt = try allocator.alloc(u8, size_decompressed);
+        defer allocator.free(dt);
+
+        _ = try entry_file.readAll(data);
+
+        // TODO: if compressed is bigger t means we need to use raw
+        const size_compressed = ZSTD_compress(dt.ptr, size_decompressed, data.ptr, size_decompressed, 0);
+
+        if (ZSTD_isError(size_compressed)) {
+            print("err: {s}\n", .{ZSTD_getErrorName(size_compressed)});
+        }
+
+        print("fine\n", .{});
 
         const wad_entry: EntryV3 = .{
             .hash = hash,
             .offset = 0,
-            .size_compressed = 0,
-            .size_decompressed = 0,
+            .size_compressed = @intCast(size_compressed),
+            .size_decompressed = @intCast(size_decompressed),
             .type = EntryType.zstd,
             .subchunk_count = 0,
             .is_duplicate = 0,
