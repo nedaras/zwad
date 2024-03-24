@@ -4,6 +4,7 @@ const PathThree = @import("PathThree.zig");
 extern fn ZSTD_decompress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize) usize;
 extern fn ZSTD_getErrorName(code: usize) [*c]const u8;
 extern fn ZSTD_isError(code: usize) bool;
+extern fn ZSTD_XXH64(input: *const anyopaque, length: usize, seed: u64) u64;
 
 const fs = std.fs;
 const io = std.io;
@@ -136,6 +137,8 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     var three = PathThree.init(allocator);
     errdefer three.deinit();
 
+    // TODO: make buffer size of MAX_PATH_LEN + 16(hash) + 1(space)
+    // and we we get error out of mem we will try ig change the file name
     var buffer: [1024 * 8]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
         const hex_hash = data[0..16];
@@ -189,8 +192,44 @@ pub fn extractWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes
         }
 
         const path = try fmt.allocPrint(allocator, "{s}/{d}", .{ out, entry.hash });
+        // add extract wad into memory
+        // f
         defer allocator.free(path);
 
         try makeFile(path, entry.hash, data);
     }
+}
+
+fn isHashedFile(file_name: []const u8) bool {
+    for (file_name) |c| {
+        if (c >= '0' and c <= '9') continue;
+        return false;
+    }
+    return true;
+}
+
+fn getFilesHash(path: []const u8, file_name: []const u8) !u64 {
+    if (isHashedFile(file_name)) {
+        return try fmt.parseInt(u64, file_name, 10);
+    }
+    return ZSTD_XXH64(path.ptr, path.len, 0);
+}
+
+pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: []const u8) !void {
+    var entries = std.ArrayList(EntryV3).init(allocator);
+    defer entries.deinit();
+
+    var it_dir = try fs.cwd().openIterableDir(wad, .{});
+    var iter = try it_dir.walk(allocator);
+    defer iter.deinit();
+
+    while (try iter.next()) |entry| {
+        if (entry.kind == .directory) continue;
+        const hash = try getFilesHash(entry.path, entry.basename);
+
+        print("{d}\n", .{hash});
+    }
+
+    _ = hashes;
+    _ = out;
 }
