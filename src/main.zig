@@ -14,7 +14,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // c_allocatpr cuz were like allocating bilion things in there
-    //var hashes = try wad.importHashes(heap.c_allocator, "hashes.txt");
+    //var hashes = try wad.importHashes(allocator, "hashes.txt");
     //defer hashes.deinit();
 
     //try wad.extractWAD(allocator, "Aatrox.wad.client", "out/", hashes);

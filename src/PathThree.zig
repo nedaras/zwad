@@ -54,11 +54,6 @@ fn pushNode(self: *PathThree, parent: *Node, value: []const u8) !*Node {
 }
 
 pub fn addFile(self: *PathThree, path: []const u8, hash: u64) !void {
-    if (self.entires.contains(hash)) {
-        const AddPathError = error{HashAlreadyInUse};
-        return AddPathError.HashAlreadyInUse;
-    }
-
     var it = mem.split(u8, path, "/");
     var node = &self.head;
 

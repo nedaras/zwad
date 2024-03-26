@@ -134,8 +134,7 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     const file = try fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var buffered_reader = io.bufferedReaderSize(1024 * 1024, file.reader());
-    const reader = buffered_reader.reader();
+    var buffered_reader = io.bufferedReader(file.reader());
 
     var three = PathThree.init(allocator);
     errdefer three.deinit();
@@ -143,7 +142,7 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     // TODO: make buffer size of MAX_PATH_LEN + 16(hash) + 1(space)
     // and we we get error out of mem we will try ig change the file name
     var buffer: [1024 * 8]u8 = undefined;
-    while (try reader.readUntilDelimiterOrEof(&buffer, '\n')) |data| {
+    while (try streamUntilDelimiterOrEof(&buffered_reader, &buffer, '\n')) |data| {
         const hex_hash = data[0..16];
         const file_path = data[16 + 1 ..];
 
@@ -153,6 +152,32 @@ pub fn importHashes(allocator: Allocator, path: []const u8) !PathThree {
     }
 
     return three;
+}
+
+fn streamUntilDelimiterOrEof(buffered: anytype, buffer: []u8, delimiter: u8) !?[]u8 {
+    var fbs = io.fixedBufferStream(buffer);
+    const writer = fbs.writer();
+
+    while (true) {
+        const start = buffered.start;
+        if (std.mem.indexOfScalar(u8, buffered.buf[start..buffered.end], delimiter)) |pos| {
+            try writer.writeAll(buffered.buf[start .. start + pos]);
+            buffered.start += pos + 1;
+            break;
+        }
+        try writer.writeAll(buffered.buf[start..buffered.end]);
+
+        const n = try buffered.unbuffered_reader.read(buffered.buf[0..]);
+
+        if (n == 0) return null;
+
+        buffered.start = 0;
+        buffered.end = n;
+    }
+
+    const output = fbs.getWritten();
+    buffer[output.len] = delimiter; // emulating old behaviour
+    return output;
 }
 
 fn makeFile(path: []const u8, hash: u64, data: []const u8) !void {
@@ -211,75 +236,86 @@ fn isHashedFile(file_name: []const u8) bool {
     return true;
 }
 
-fn getFilesHash(path: []const u8, file_name: []const u8) !u64 {
-    if (isHashedFile(file_name)) {
-        return try fmt.parseInt(u64, file_name, 10);
-    }
-    return ZSTD_XXH64(path.ptr, path.len, 0);
-}
-
+// would be the coolest thing ever if we would like compress hashes in entry, like its hash would be zeros,
+// and from there we could get file names, and if there is now hash with zero at index 1 it means that there are no hashes
 pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: []const u8) !void {
     var entries = std.ArrayList(EntryV3).init(allocator);
     defer entries.deinit();
 
-    var iter = try (try fs.cwd().openIterableDir(wad, .{})).walk(allocator);
-    defer iter.deinit();
+    const path_iteratable_dir = try fs.cwd().openIterableDir(wad, .{});
 
-    const hashes_file = try fs.cwd().createFile(hashes, .{});
+    var entries_count: u32 = 0;
 
-    var buffered_writer = io.bufferedWriter(hashes_file.writer());
-    const writer = buffered_writer.writer();
+    {
+        const hashes_file = try fs.cwd().createFile(hashes, .{});
+        defer hashes_file.close();
 
-    defer hashes_file.close();
+        var buffered_writer = io.bufferedWriter(hashes_file.writer());
+        const writer = buffered_writer.writer();
 
-    var buffer: [16 + 1 + fs.MAX_PATH_BYTES + 1]u8 = undefined;
+        var buffer: [16 + 1 + fs.MAX_PATH_BYTES + 1]u8 = undefined;
 
-    while (try iter.next()) |entry| {
-        if (entry.kind == .directory) continue;
+        var path_iterator = try path_iteratable_dir.walk(allocator);
+        defer path_iterator.deinit();
 
-        const hash = try getFilesHash(entry.path, entry.basename);
+        while (try path_iterator.next()) |entry| : (entries_count += 1) {
+            if (entry.kind == .directory) continue;
 
-        if (!isHashedFile(entry.basename)) {
+            if (isHashedFile(entry.basename)) continue;
+            const hash = ZSTD_XXH64(entry.path.ptr, entry.path.len, 0);
+
             const line = try fmt.bufPrint(&buffer, "{x:0>16} {s}\n", .{ hash, entry.path });
             _ = try writer.write(line);
         }
-
-        const entry_file = try entry.dir.openFile(entry.basename, .{});
-        defer entry_file.close();
-
-        const size_decompressed = try entry_file.getEndPos();
-
-        var data = try allocator.alloc(u8, size_decompressed);
-        defer allocator.free(data);
-
-        var dt = try allocator.alloc(u8, size_decompressed);
-        defer allocator.free(dt);
-
-        _ = try entry_file.readAll(data);
-
-        // TODO: if compressed is bigger t means we need to use raw
-        const size_compressed = ZSTD_compress(dt.ptr, size_decompressed, data.ptr, size_decompressed, 0);
-
-        if (ZSTD_isError(size_compressed)) {
-            print("err: {s}\n", .{ZSTD_getErrorName(size_compressed)});
-        }
-
-        print("fine\n", .{});
-
-        const wad_entry: EntryV3 = .{
-            .hash = hash,
-            .offset = 0,
-            .size_compressed = @intCast(size_compressed),
-            .size_decompressed = @intCast(size_decompressed),
-            .type = EntryType.zstd,
-            .subchunk_count = 0,
-            .is_duplicate = 0,
-            .subchunk_index = 0,
-            .checksum_old = 0,
-        };
-
-        try entries.append(wad_entry);
     }
 
-    _ = out;
+    var out_file = try fs.cwd().createFile(out, .{});
+    defer out_file.close();
+
+    const writer = out_file.writer();
+
+    try writer.writeStruct(Version.latest());
+
+    var path_iterator = try path_iteratable_dir.walk(allocator);
+    defer path_iterator.deinit();
+
+    while (try path_iterator.next()) |entry| {
+        //const entry_file = try entry.dir.openFile(entry.basename, .{});
+        //defer entry_file.close();
+
+        //const size_decompressed = try entry_file.getEndPos();
+
+        //var data = try allocator.alloc(u8, size_decompressed);
+        //defer allocator.free(data);
+
+        //var dt = try allocator.alloc(u8, size_decompressed);
+        //defer allocator.free(dt);
+
+        //_ = try entry_file.readAll(data);
+
+        // TODO: if compressed is bigger t means we need to use raw
+        //const size_compressed = ZSTD_compress(dt.ptr, size_decompressed, data.ptr, size_decompressed, 0);
+
+        //if (ZSTD_isError(size_compressed)) {
+        //print("err: {s}\n", .{ZSTD_getErrorName(size_compressed)});
+        _ = entry;
+    }
+
+    //print("fine\n", .{});
+
+    //const wad_entry: EntryV3 = .{
+    //.hash = hash,
+    //.offset = 0,
+    //.size_compressed = @intCast(size_compressed),
+    //.size_decompressed = @intCast(size_decompressed),
+    //.type = EntryType.zstd,
+    //.subchunk_count = 0,
+    //.is_duplicate = 0,
+    //.subchunk_index = 0,
+    //.checksum_old = 0,
+    //};
+
+    //try entries.append(wad_entry);
+    //}
+
 }
