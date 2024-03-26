@@ -5,7 +5,19 @@ extern fn ZSTD_decompress(dst: *anyopaque, dst_len: usize, src: *const anyopaque
 extern fn ZSTD_compress(dst: *anyopaque, dst_len: usize, src: *const anyopaque, src_len: usize, compression_level: c_int) usize;
 extern fn ZSTD_getErrorName(code: usize) [*c]const u8;
 extern fn ZSTD_isError(code: usize) bool;
+
+const XXH3_state_s = extern struct {
+    a: u128 = 0,
+    b: u128 = 0,
+    c: u128 = 0,
+    d: u128 = 0,
+};
+
 extern fn ZSTD_XXH64(input: *const anyopaque, length: usize, seed: u64) u64;
+
+// why we ant incldue these
+extern fn ZSTD_XXH_INLINE_XXH3_128bits_reset(statePtr: *XXH3_state_s) c_int;
+extern fn ZSTD_XXH_INLINE_XXH3_128bits_update(statePtr: *XXH3_state_s, input: *const anyopaque, len: usize) c_int;
 
 const fs = std.fs;
 const io = std.io;
@@ -279,6 +291,8 @@ pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: [
     var path_iterator = try path_iteratable_dir.walk(allocator);
     defer path_iterator.deinit();
 
+    print("{d}\n", .{@sizeOf(EntryV3)});
+
     while (try path_iterator.next()) |entry| {
         //const entry_file = try entry.dir.openFile(entry.basename, .{});
         //defer entry_file.close();
@@ -300,6 +314,10 @@ pub fn makeWAD(allocator: Allocator, wad: []const u8, out: []const u8, hashes: [
         //print("err: {s}\n", .{ZSTD_getErrorName(size_compressed)});
         _ = entry;
     }
+
+    var state: XXH3_state_s = .{};
+    _ = ZSTD_XXH_INLINE_XXH3_128bits_reset(&state);
+    _ = ZSTD_XXH_INLINE_XXH3_128bits_update(&state, &Version.latest(), @sizeOf(Version));
 
     //print("fine\n", .{});
 
