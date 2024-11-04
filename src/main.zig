@@ -14,7 +14,7 @@ const Header = extern struct {
 
     magic: [2]u8,
     version: Version,
-    signature: u128 align(1), // its just all file checksums hashed
+    signature: u128 align(1), // its just all entries checksums hashed
     unknown: [240]u8, // idk what should this be
     checksum: u64 align(1),
     entries_len: u32,
