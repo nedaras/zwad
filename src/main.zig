@@ -6,6 +6,10 @@ const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 
+const c = @cImport({
+    @cInclude("zstd.h");
+});
+
 const Header = extern struct {
     const Version = extern struct {
         major: u8,

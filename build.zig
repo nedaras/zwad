@@ -20,6 +20,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zstd = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const lib = b.addStaticLibrary(.{
         .name = "ZWAD",
         // In this case the main source file is merely a path, however, in more
@@ -34,6 +39,61 @@ pub fn build(b: *std.Build) void {
     lib.addIncludePath(xxhash.path(""));
     lib.addCSourceFile(.{
         .file = xxhash.path("xxhash.c"),
+        .flags = &.{},
+    });
+
+    lib.addIncludePath(zstd.path("lib"));
+    lib.addIncludePath(zstd.path("lib/decompress"));
+    lib.addIncludePath(zstd.path("lib/dictBuilder"));
+    lib.addIncludePath(zstd.path("lib/deprecated"));
+    lib.addIncludePath(zstd.path("lib/common"));
+    lib.addIncludePath(zstd.path("lib/legacy"));
+    lib.addIncludePath(zstd.path("lib/compress"));
+
+    lib.addCSourceFiles(.{
+        .root = zstd.path("lib"),
+        .files = &.{
+            "decompress/zstd_decompress_block.c",
+            "decompress/huf_decompress.c",
+            "decompress/huf_decompress_amd64.S",
+            "decompress/zstd_ddict.c",
+            "decompress/zstd_decompress.c",
+            "dictBuilder/divsufsort.c",
+            "dictBuilder/zdict.c",
+            "dictBuilder/cover.c",
+            "dictBuilder/fastcover.c",
+            "deprecated/zbuff_common.c",
+            "deprecated/zbuff_compress.c",
+            "deprecated/zbuff_decompress.c",
+            "common/xxhash.c",
+            "common/pool.c",
+            "common/error_private.c",
+            "common/debug.c",
+            "common/fse_decompress.c",
+            "common/zstd_common.c",
+            "common/entropy_common.c",
+            "common/threading.c",
+            "legacy/zstd_v02.c",
+            "legacy/zstd_v06.c",
+            "legacy/zstd_v03.c",
+            "legacy/zstd_v05.c",
+            "legacy/zstd_v01.c",
+            "legacy/zstd_v04.c",
+            "legacy/zstd_v07.c",
+            "compress/zstd_ldm.c",
+            "compress/zstd_lazy.c",
+            "compress/zstd_fast.c",
+            "compress/zstd_compress.c",
+            "compress/huf_compress.c",
+            "compress/zstd_compress_sequences.c",
+            "compress/fse_compress.c",
+            "compress/hist.c",
+            "compress/zstd_compress_literals.c",
+            "compress/zstdmt_compress.c",
+            "compress/zstd_double_fast.c",
+            "compress/zstd_opt.c",
+            "compress/zstd_compress_superblock.c",
+        },
         .flags = &.{},
     });
 
@@ -54,6 +114,61 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(xxhash.path(""));
     exe.addCSourceFile(.{
         .file = xxhash.path("xxhash.c"),
+        .flags = &.{},
+    });
+
+    exe.addIncludePath(zstd.path("lib"));
+    exe.addIncludePath(zstd.path("lib/decompress"));
+    exe.addIncludePath(zstd.path("lib/dictBuilder"));
+    exe.addIncludePath(zstd.path("lib/deprecated"));
+    exe.addIncludePath(zstd.path("lib/common"));
+    exe.addIncludePath(zstd.path("lib/legacy"));
+    exe.addIncludePath(zstd.path("lib/compress"));
+
+    exe.addCSourceFiles(.{
+        .root = zstd.path("lib"),
+        .files = &.{
+            "decompress/zstd_decompress_block.c",
+            "decompress/huf_decompress.c",
+            "decompress/huf_decompress_amd64.S",
+            "decompress/zstd_ddict.c",
+            "decompress/zstd_decompress.c",
+            "dictBuilder/divsufsort.c",
+            "dictBuilder/zdict.c",
+            "dictBuilder/cover.c",
+            "dictBuilder/fastcover.c",
+            "deprecated/zbuff_common.c",
+            "deprecated/zbuff_compress.c",
+            "deprecated/zbuff_decompress.c",
+            "common/xxhash.c",
+            "common/pool.c",
+            "common/error_private.c",
+            "common/debug.c",
+            "common/fse_decompress.c",
+            "common/zstd_common.c",
+            "common/entropy_common.c",
+            "common/threading.c",
+            "legacy/zstd_v02.c",
+            "legacy/zstd_v06.c",
+            "legacy/zstd_v03.c",
+            "legacy/zstd_v05.c",
+            "legacy/zstd_v01.c",
+            "legacy/zstd_v04.c",
+            "legacy/zstd_v07.c",
+            "compress/zstd_ldm.c",
+            "compress/zstd_lazy.c",
+            "compress/zstd_fast.c",
+            "compress/zstd_compress.c",
+            "compress/huf_compress.c",
+            "compress/zstd_compress_sequences.c",
+            "compress/fse_compress.c",
+            "compress/hist.c",
+            "compress/zstd_compress_literals.c",
+            "compress/zstdmt_compress.c",
+            "compress/zstd_double_fast.c",
+            "compress/zstd_opt.c",
+            "compress/zstd_compress_superblock.c",
+        },
         .flags = &.{},
     });
 

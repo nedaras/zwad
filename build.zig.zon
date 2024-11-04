@@ -27,6 +27,10 @@
             .url = "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.2.tar.gz",
             .hash = "1220f1fadc5ed8683a107695153d475025cef9619fd05040043abe8f923741d093d3",
         },
+        .zstd = .{
+            .url = "https://github.com/facebook/zstd/archive/refs/tags/v1.5.2.tar.gz",
+            .hash = "1220a7f0862d455a469c66b85d8e5e604134bfc4c1f96113dbc5dd0e35e412e0dca9",
+        },
     },
     .paths = .{
         "build.zig",
