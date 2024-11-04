@@ -76,12 +76,13 @@ pub fn main() !void {
     assert(header.version.major == 3);
     assert(header.version.minor == 3);
 
-    var list = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
-    defer list.deinit();
+    var out_list = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
+    defer out_list.deinit();
 
-    const window_buf = try allocator.alloc(u8, 1 << 23);
-    defer allocator.free(window_buf);
+    var in_list = std.ArrayList(u8).init(allocator);
+    defer in_list.deinit();
 
+    var scrape_buf: [256]u8 = undefined;
     for (header.entries_len) |_| { // prob its better to mmap file then streaming and seeking it
         const entry = try reader.readStruct(Entry);
         switch (entry.entry_type) {
@@ -89,22 +90,28 @@ pub fn main() !void {
                 const pos = try file.getPos();
                 try file.seekTo(entry.offset);
 
-                try list.ensureTotalCapacity(entry.decompressed_len);
-                assert(list.capacity >= entry.decompressed_len);
+                try out_list.ensureTotalCapacity(entry.decompressed_len);
+                try in_list.ensureTotalCapacity(entry.compressed_len);
+                assert(out_list.capacity >= entry.decompressed_len);
+                assert(in_list.capacity >= entry.compressed_len);
 
-                const slice = list.items.ptr[0..entry.decompressed_len];
+                const out = out_list.items.ptr[0..entry.decompressed_len];
+                const in = in_list.items.ptr[0..entry.compressed_len];
 
-                var zstd_stream = zstd.decompressor(file.reader(), .{ .window_buffer = window_buf }); // zigs implemintation is too slow, and we cant compress
+                assert(try file.reader().readAll(in) == in.len);
 
-                assert(try zstd_stream.reader().readAll(slice) == entry.decompressed_len);
+                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len);
+                if (c.ZSTD_isError(zstd_len) == 1) {
+                    std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
+                }
 
                 try file.seekTo(pos);
 
-                const name = try std.fmt.bufPrint(window_buf, "{x}.dds", .{entry.hash});
+                const name = try std.fmt.bufPrint(&scrape_buf, "{x}.dds", .{entry.hash});
                 const out_file = try out_dir.createFile(name, .{});
                 defer out_file.close();
 
-                try out_file.writeAll(slice);
+                try out_file.writeAll(out);
             },
             .raw, .gzip, .link, .zstd_multi => |t| {
                 std.debug.print("warn: idk how to handle, {s}.\n", .{@tagName(t)});
