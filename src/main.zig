@@ -107,12 +107,14 @@ pub fn main() !void {
                 assert(out.len == c.ZSTD_getDecompressedSize(in.ptr, in.len));
                 //std.debug.print("pos: {d}, {d}\n", .{in[0..4]});
 
-                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, src.ptr, src.len); // why its failing????
-                if (c.ZSTD_isError(zstd_len) == 1) {
-                    std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
-                } else {
-                    std.debug.print("no err\n", .{});
-                }
+                std.debug.print("frame: {d}\n", .{find_frame_start(in)});
+
+                //const zstd_len = c.ZSTD_decompress(out.ptr, out.len, src.ptr, src.len); // why its failing????
+                //if (c.ZSTD_isError(zstd_len) == 1) {
+                //std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
+                //} else {
+                //std.debug.print("no err\n", .{});
+                //}
 
                 try file.seekTo(pos);
             },
@@ -121,4 +123,9 @@ pub fn main() !void {
             },
         }
     }
+}
+
+fn find_frame_start(buf: []const u8) !usize {
+    const magic = [_]u8{ 0x28, 0xB5, 0x2F, 0xFD };
+    return mem.indexOf(u8, buf, &magic) orelse return error.CouldNotBeFound;
 }
