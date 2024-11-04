@@ -3,7 +3,6 @@ const xxhash = @import("xxhash.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
-const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 
 const c = @cImport({
@@ -25,7 +24,7 @@ const Header = extern struct {
 };
 
 const EntryType = enum(u4) {
-    raw = 0,
+    raw,
     link,
     gzip,
     zstd,
@@ -65,8 +64,8 @@ pub fn main() !void {
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
-    var fbr = io.bufferedReader(file.reader());
-    const reader = fbr.reader();
+    //var fbr = io.bufferedReader(file.reader());
+    const reader = file.reader();
 
     const header = try reader.readStruct(Header); // idk if league uses a specific endian, my guess is that they do not
 
@@ -74,25 +73,46 @@ pub fn main() !void {
     assert(header.version.major == 3);
     assert(header.version.minor == 3);
 
-    var list = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
-    defer list.deinit();
+    var list_in = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
+    defer list_in.deinit();
+
+    var list_out = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
+    defer list_out.deinit();
 
     for (header.entries_len) |_| { // prob its better to mmap file then streaming and seeking it
         const entry = try reader.readStruct(Entry);
         switch (entry.entry_type) {
             .zstd => {
+                assert(entry.decompressed_len > entry.compressed_len); // prob can be hit often
+
+                try list_in.ensureTotalCapacity(entry.compressed_len);
+                try list_out.ensureTotalCapacity(entry.decompressed_len);
+
+                assert(list_in.capacity >= entry.compressed_len);
+                assert(list_out.capacity >= entry.decompressed_len);
+
+                const in = list_in.items.ptr[0..entry.compressed_len];
+                const out = list_in.items.ptr[0..entry.decompressed_len];
+
                 const pos = try file.getPos();
                 try file.seekTo(entry.offset);
 
-                try list.ensureTotalCapacity(entry.decompressed_len);
-                assert(list.capacity >= entry.decompressed_len);
+                //std.debug.print("pos: {d}\n", .{pos});
 
-                const slice = list.items.ptr[0..entry.decompressed_len];
+                //std.debug.print("pos: {x}\n", .{pos});
+                //std.debug.print("unused: {x}\n", .{fbr.start - fbr.end});
+                //try file.seekTo(entry.offset);
 
-                var window_buf: [1 << 23]u8 = undefined;
-                var zstd_stream = zstd.decompressor(file.reader(), .{ .window_buffer = &window_buf }); // zigs implemintation is too slow, and we cant compress
+                assert(try file.reader().readAll(in) == entry.compressed_len);
+                assert(out.len == c.ZSTD_getDecompressedSize(in.ptr, in.len));
+                //std.debug.print("pos: {d}, {d}\n", .{in[0..4]});
 
-                assert(try zstd_stream.reader().readAll(slice) == entry.decompressed_len);
+                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, src.ptr, src.len); // why its failing????
+                if (c.ZSTD_isError(zstd_len) == 1) {
+                    std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
+                } else {
+                    std.debug.print("no err\n", .{});
+                }
 
                 try file.seekTo(pos);
             },
