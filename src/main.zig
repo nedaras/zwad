@@ -5,6 +5,11 @@ const io = std.io;
 const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
+const win = std.os.windows;
+
+extern "kernel32" fn CreateFileMappingA(hFile: win.HANDLE, ?*anyopaque, flProtect: win.DWORD, dwMaximumSizeHigh: win.DWORD, dwMaximumSizeLow: win.DWORD, lpName: ?win.LPCSTR) callconv(.C) ?win.HANDLE;
+
+extern "kernel32" fn MapViewOfFile(hFileMappingObject: win.HANDLE, dwDesiredAccess: win.DWORD, dwFileOffsetHigh: win.DWORD, dwFileOffsetLow: win.DWORD, dwNumberOfBytesToMap: win.SIZE_T) callconv(.C) ?[*]u8;
 
 const c = @cImport({
     @cInclude("zstd.h");
@@ -64,6 +69,16 @@ pub fn main() !void {
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
+    if (CreateFileMappingA(file.handle, null, win.PAGE_READONLY, 0, 0, null)) |map| {
+        defer win.CloseHandle(map);
+        const ptr = MapViewOfFile(map, 0x4, 0, 0, 0);
+        if (ptr == null) {
+            return error.No;
+        }
+        std.debug.print("magic: {s}\n", .{ptr.?[0..2]});
+        return error.Yes;
+    }
+
     var out_dir = try fs.cwd().openDir(dst, .{});
     defer out_dir.close();
 
@@ -100,7 +115,7 @@ pub fn main() !void {
 
                 assert(try file.reader().readAll(in) == in.len);
 
-                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len);
+                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // can we stream it, check how does ZSTD_decompressStream work and make zig like api.
                 if (c.ZSTD_isError(zstd_len) == 1) {
                     std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
                 }
