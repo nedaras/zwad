@@ -5,12 +5,20 @@ const assert = std.debug.assert;
 pub fn XxHash3(bits: comptime_int) type {
     if (bits != 128 and bits != 64) @compileError("XxHash3 only supports 64 or 128 bits hashes");
     return struct {
+        pub const Hash = if (bits == 128) u128 else u64;
+
         const Self = @This();
-        const Hash = if (bits == 128) u128 else u64;
 
         state: xxhash.XXH3_state_t,
 
-        pub fn init(seed: u64) Self {
+        pub inline fn hash(input: []const u8) Hash {
+            if (bits == 64) {
+                return xxhash.XXH3_64bits(input.ptr, input.len);
+            }
+            @panic("not implemented");
+        }
+
+        pub fn init() Self {
             if (bits == 64) {
                 @panic("not implemented");
             }
@@ -18,7 +26,6 @@ pub fn XxHash3(bits: comptime_int) type {
             var state: xxhash.XXH3_state_t = undefined;
             assert(xxhash.XXH3_128bits_reset(&state) == .XXH_OK);
 
-            state.seed = seed;
             return .{
                 .state = state,
             };
@@ -32,10 +39,9 @@ pub fn XxHash3(bits: comptime_int) type {
             @panic("not implemented");
         }
 
-        pub fn final(self: *const Self) Hash {
+        pub inline fn final(self: *const Self) Hash {
             if (bits == 128) {
-                const hash = xxhash.XXH3_128bits_digest(&self.state);
-                return @bitCast(hash); // it is safe to cast.
+                return @bitCast(xxhash.XXH3_128bits_digest(&self.state));
             }
             @panic("not implemented");
         }

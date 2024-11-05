@@ -44,4 +44,6 @@ pub extern fn XXH3_128bits_update(statePtr: *XXH3_state_t, input: [*]const u8, l
 
 pub extern fn XXH3_128bits_digest(statePtr: *const XXH3_state_t) XXH128_hash_t;
 
+pub extern fn XXH3_64bits(input: [*]const u8, length: usize) u64;
+
 pub extern fn XXH64(input: [*]const u8, length: usize, seed: u64) u64;
