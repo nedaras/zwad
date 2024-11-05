@@ -7,9 +7,11 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const win = std.os.windows;
 
-extern "kernel32" fn CreateFileMappingA(hFile: win.HANDLE, ?*anyopaque, flProtect: win.DWORD, dwMaximumSizeHigh: win.DWORD, dwMaximumSizeLow: win.DWORD, lpName: ?win.LPCSTR) callconv(.C) ?win.HANDLE;
+extern "kernel32" fn CreateFileMappingA(hFile: win.HANDLE, ?*anyopaque, flProtect: win.DWORD, dwMaximumSizeHigh: win.DWORD, dwMaximumSizeLow: win.DWORD, lpName: ?win.LPCSTR) callconv(win.WINAPI) ?win.HANDLE;
 
-extern "kernel32" fn MapViewOfFile(hFileMappingObject: win.HANDLE, dwDesiredAccess: win.DWORD, dwFileOffsetHigh: win.DWORD, dwFileOffsetLow: win.DWORD, dwNumberOfBytesToMap: win.SIZE_T) callconv(.C) ?[*]u8;
+extern "kernel32" fn MapViewOfFile(hFileMappingObject: win.HANDLE, dwDesiredAccess: win.DWORD, dwFileOffsetHigh: win.DWORD, dwFileOffsetLow: win.DWORD, dwNumberOfBytesToMap: win.SIZE_T) callconv(win.WINAPI) ?[*]u8;
+
+extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: win.LPCVOID) callconv(win.WINAPI) win.BOOL;
 
 const c = @cImport({
     @cInclude("zstd.h");
@@ -69,21 +71,18 @@ pub fn main() !void {
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
-    if (CreateFileMappingA(file.handle, null, win.PAGE_READONLY, 0, 0, null)) |map| {
-        defer win.CloseHandle(map);
-        const ptr = MapViewOfFile(map, 0x4, 0, 0, 0);
-        if (ptr == null) {
-            return error.No;
-        }
-        std.debug.print("magic: {s}\n", .{ptr.?[0..2]});
-        return error.Yes;
-    }
+    const file_len = try file.getEndPos();
+    const maping = CreateFileMappingA(file.handle, null, win.PAGE_READONLY, 0, 0, null).?;
+    defer win.CloseHandle(maping);
+
+    const file_buf = MapViewOfFile(maping, 0x4, 0, 0, 0).?;
+    defer _ = UnmapViewOfFile(file_buf);
+
+    var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
+    const reader = file_stream.reader();
 
     var out_dir = try fs.cwd().openDir(dst, .{});
     defer out_dir.close();
-
-    var fbr = io.bufferedReader(file.reader());
-    const reader = fbr.reader();
 
     const header = try reader.readStruct(Header); // idk if league uses a specific endian, my guess is that they do not
 
@@ -91,36 +90,31 @@ pub fn main() !void {
     assert(header.version.major == 3);
     assert(header.version.minor == 3);
 
-    var out_list = std.ArrayList(u8).init(allocator); // todo: dont use arraylist as a reusible buffer
+    var out_list = std.ArrayList(u8).init(allocator);
     defer out_list.deinit();
 
-    var in_list = std.ArrayList(u8).init(allocator);
-    defer in_list.deinit();
-
     var scrape_buf: [256]u8 = undefined;
-    for (header.entries_len) |_| { // prob its better to mmap file then streaming and seeking it
+    for (header.entries_len) |_| {
         const entry = try reader.readStruct(Entry);
         switch (entry.entry_type) {
-            .zstd => {
-                const pos = try file.getPos();
-                try file.seekTo(entry.offset);
+            .zstd => { // performance not bad, but we probably could multithread (it would be pain to implement)
+                const pos = try file_stream.getPos();
+                try file_stream.seekTo(entry.offset);
 
                 try out_list.ensureTotalCapacity(entry.decompressed_len);
-                try in_list.ensureTotalCapacity(entry.compressed_len);
+
                 assert(out_list.capacity >= entry.decompressed_len);
-                assert(in_list.capacity >= entry.compressed_len);
+                assert(file_len - file_stream.pos >= entry.compressed_len);
 
-                const out = out_list.items.ptr[0..entry.decompressed_len];
-                const in = in_list.items.ptr[0..entry.compressed_len];
+                const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
+                const out = out_list.allocatedSlice()[0..entry.decompressed_len];
 
-                assert(try file.reader().readAll(in) == in.len);
-
-                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // can we stream it, check how does ZSTD_decompressStream work and make zig like api.
+                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // we could have stack buf and just fill it and write to file, and thus we would not need to alloc mem.
                 if (c.ZSTD_isError(zstd_len) == 1) {
                     std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
                 }
 
-                try file.seekTo(pos);
+                try file_stream.seekTo(pos);
 
                 const name = try std.fmt.bufPrint(&scrape_buf, "{x}.dds", .{entry.hash});
                 const out_file = try out_dir.createFile(name, .{});
@@ -128,7 +122,7 @@ pub fn main() !void {
 
                 try out_file.writeAll(out);
             },
-            .raw, .gzip, .link, .zstd_multi => |t| {
+            .raw, .gzip, .link, .zstd_multi => |t| { // hiping that gzip in zig is now slow.
                 std.debug.print("warn: idk how to handle, {s}.\n", .{@tagName(t)});
             },
         }
