@@ -25,9 +25,9 @@ const Header = extern struct {
     };
 
     version: Version,
-    signature: u128 align(1), // its just all entries checksums hashed
+    signature: u128 align(1), // idk how to get
     unknown: [240]u8, // idk what should this be
-    checksum: u64 align(1),
+    checksum: u64 align(1), // idk  how to get
     entries_len: u32,
 };
 
@@ -87,12 +87,6 @@ pub fn main() !void { // validating files
     assert(header.version.major == 3);
     assert(header.version.minor == 3);
 
-    const version_buf: [@sizeOf(Header.Version)]u8 = @bitCast(header.version); // dumb
-    //const version_buf = [_]u8{ 'R', 'W', 3, 4 };
-
-    var signature = xxhash.XxHash3(128).init();
-    signature.update(&version_buf);
-
     var out_list = std.ArrayList(u8).init(allocator);
     defer out_list.deinit();
 
@@ -114,59 +108,36 @@ pub fn main() !void { // validating files
                 try file_stream.seekTo(entry.offset);
 
                 assert(entry.compressed_len == entry.decompressed_len);
-                assert(file_len - file_stream.pos >= entry.compressed_len);
+                assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
 
                 const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
 
                 const checksum = xxhash.XxHash3(64).hash(in);
                 assert(checksum == entry.checksum);
 
-                const a: [8]u8 = @bitCast(entry.hash);
-                const b: [8]u8 = @bitCast(checksum);
-
-                signature.update(&a);
-                signature.update(&b);
-
                 try file_stream.seekTo(pos);
             },
-            .zstd, .zstd_multi => {
+            .zstd, .gzip, .zstd_multi => {
                 const pos = try file_stream.getPos();
                 try file_stream.seekTo(entry.offset);
 
-                try out_list.ensureTotalCapacity(entry.decompressed_len);
-
-                assert(out_list.capacity >= entry.decompressed_len);
-                assert(file_len - file_stream.pos >= entry.compressed_len);
+                assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
 
                 const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
-                const out = out_list.allocatedSlice()[0..entry.decompressed_len];
 
                 const magic = [_]u8{ 0x28, 0xB5, 0x2f, 0xfd };
                 assert(mem.eql(u8, in[0..4], &magic));
 
-                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // we could have stack buf and just fill it and write to file, and thus we would not need to alloc mem.
-                if (c.ZSTD_isError(zstd_len) == 1) {
-                    std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
-                }
-
                 const checksum = xxhash.XxHash3(64).hash(in);
                 assert(checksum == entry.checksum);
 
-                const a: [8]u8 = @bitCast(entry.hash);
-                const b: [8]u8 = @bitCast(xxhash.XxHash3(64).hash(in));
-
-                signature.update(&a);
-                signature.update(&b);
-
                 try file_stream.seekTo(pos);
             },
-            .gzip, .link => |t| { // hiping that gzip in zig is now slow.
+            .link => |t| { // hiping that gzip in zig is now slow.
                 std.debug.print("warn: idk how to handle, {s}.\n", .{@tagName(t)});
             },
         }
     }
-
-    std.debug.print("signature: {x}, {x}\n", .{ header.signature, signature.final() });
 }
 
 pub fn parsing_main() !void {
