@@ -25,9 +25,8 @@ const Header = extern struct {
     };
 
     version: Version,
-    signature: u128 align(1), // idk how to get
-    unknown: [240]u8, // idk what should this be
-    checksum: u64 align(1), // idk  how to get
+    ecdsa_signature: [256]u8,
+    checksum: u64 align(1),
     entries_len: u32,
 };
 
@@ -46,13 +45,107 @@ const Entry = packed struct {
     decompressed_len: u32,
     entry_type: EntryType,
     subchunk_len: u4,
-    duplicate: u8,
-    subchunk: u16,
+    subchunk: u24,
     checksum: u64,
 };
 
-pub fn main() !void { // validating files
+fn fastHexParse(comptime T: type, buf: []const u8) !u64 {
+    var result: T = 0;
 
+    for (buf) |ch| {
+        var mask: T = undefined;
+
+        if (ch >= '0' and ch <= '9') {
+            mask = ch - '0';
+        } else if (ch >= 'a' and ch <= 'f') {
+            mask = ch - 'a' + 10;
+        } else {
+            return error.InvalidCharacter;
+        }
+
+        if (result > std.math.maxInt(T) >> 4) {
+            return error.Overflow;
+        }
+
+        result = (result << 4) | mask;
+    }
+
+    return result;
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
+
+    var client = std.http.Client{
+        .allocator = allocator,
+    };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse("http://raw.communitydragon.org/data/hashes/lol/hashes.game.txt"); // http so there would not be any tls overhead
+    var server_header_buffer: [16 * 1024]u8 = undefined;
+
+    var req = try client.open(.GET, uri, .{
+        .server_header_buffer = &server_header_buffer,
+        .keep_alive = false,
+    });
+    defer req.deinit();
+
+    try req.send();
+
+    try req.finish();
+    try req.wait();
+
+    if (req.response.status != .ok) {
+        //req.response.skip = true;
+        //assert(try req.transferRead(&.{}) == 0);
+
+        return error.UnexpectedStatusCode;
+    }
+
+    var my_buf: [4 * 1024]u8 = undefined;
+    var fbs = io.fixedBufferStream(&my_buf);
+
+    const writer = fbs.writer();
+
+    var buf: [std.http.Client.Connection.buffer_size]u8 = undefined; // we prob can use connections buffer, like fill cmds
+
+    var start: usize = 0;
+    var end: usize = 0;
+
+    while (true) {
+        if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
+            try writer.writeAll(buf[start .. start + pos]);
+            start += pos + 1;
+
+            {
+                const line = my_buf[0..fbs.pos];
+                assert(line.len > 17);
+
+                const hash = try fastHexParse(u64, line[0..16]);
+                const file = line[17..];
+                //std.debug.print("h: {x} - {s}\n", .{ hash, line[0..16] });
+
+                _ = hash;
+                _ = file;
+            }
+            fbs.pos = 0;
+
+            continue;
+        }
+        try writer.writeAll(buf[start..end]);
+
+        const amt = try req.read(buf[0..]);
+        if (amt == 0) break; //return error.EndOfStream;
+
+        start = 0;
+        end = amt;
+    }
+}
+
+pub fn main_validate() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -85,12 +178,13 @@ pub fn main() !void { // validating files
 
     assert(mem.eql(u8, &header.version.magic, "RW"));
     assert(header.version.major == 3);
-    assert(header.version.minor == 3);
+    assert(header.version.minor == 4);
 
     var out_list = std.ArrayList(u8).init(allocator);
     defer out_list.deinit();
 
     var prev_hash: u64 = 0;
+    std.debug.print("checksum: {x}\n", .{header.checksum});
     for (header.entries_len) |_| {
         const entry = try reader.readStruct(Entry);
         const gb = 1024 * 1024 * 1024;
