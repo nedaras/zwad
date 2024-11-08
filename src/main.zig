@@ -6,6 +6,7 @@ const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const win = std.os.windows;
+const native_endian = @import("builtin").target.cpu.arch.endian();
 
 extern "kernel32" fn CreateFileMappingA(hFile: win.HANDLE, ?*anyopaque, flProtect: win.DWORD, dwMaximumSizeHigh: win.DWORD, dwMaximumSizeLow: win.DWORD, lpName: ?win.LPCSTR) callconv(win.WINAPI) ?win.HANDLE;
 
@@ -49,7 +50,7 @@ const Entry = packed struct {
     checksum: u64,
 };
 
-fn fastHexParse(comptime T: type, buf: []const u8) !u64 {
+fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
     var result: T = 0;
 
     for (buf) |ch| {
@@ -102,11 +103,11 @@ pub fn main() !void {
         //req.response.skip = true;
         //assert(try req.transferRead(&.{}) == 0);
 
-        return error.UnexpectedStatusCode;
+        return error.InvalidStatusCode;
     }
 
-    var my_buf: [4 * 1024]u8 = undefined;
-    var fbs = io.fixedBufferStream(&my_buf);
+    var line_buf: [4 * 1024]u8 = undefined;
+    var fbs = io.fixedBufferStream(&line_buf);
 
     const writer = fbs.writer();
 
@@ -115,21 +116,40 @@ pub fn main() !void {
     var start: usize = 0;
     var end: usize = 0;
 
+    const out_file = try fs.cwd().createFile(".hashes", .{}); // mb maping would prob be better, cuz on falure we would not have corrupted .hashes file
+    defer out_file.close();
+
+    var bw = io.bufferedWriter(out_file.writer());
+    const file_writer = bw.writer();
+
+    // this is b shit
+    var map = std.AutoHashMap(u64, struct { ptr: [*]u8, len: usize }).init(allocator);
+    defer map.deinit();
+
+    var stored = std.ArrayList(u8).init(allocator);
+    defer stored.deinit();
+
+    var list = std.ArrayList(u64).init(allocator);
+    defer list.deinit();
+
     while (true) {
         if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
             try writer.writeAll(buf[start .. start + pos]);
             start += pos + 1;
 
             {
-                const line = my_buf[0..fbs.pos];
+                const line = line_buf[0..fbs.pos];
                 assert(line.len > 17);
+                assert(line[16] == ' ');
 
                 const hash = try fastHexParse(u64, line[0..16]);
                 const file = line[17..];
-                //std.debug.print("h: {x} - {s}\n", .{ hash, line[0..16] });
 
-                _ = hash;
-                _ = file;
+                const index = stored.items.len;
+                try stored.appendSlice(file);
+
+                try map.put(hash, .{ .ptr = stored.items.ptr + index, .len = stored.items.len - index });
+                try list.append(hash);
             }
             fbs.pos = 0;
 
@@ -143,6 +163,23 @@ pub fn main() !void {
         start = 0;
         end = amt;
     }
+
+    std.debug.print("started sorting...\n", .{});
+
+    const Context = struct {
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            _ = ctx;
+            return a < b;
+        }
+    };
+
+    std.sort.block(u64, list.items, Context{}, Context.lessThan);
+    for (list.items) |k| {
+        const v = map.get(k).?;
+        try file_writer.print("{x:0>16} {s}\n", .{ k, v.ptr[0..v.len] });
+    }
+
+    try bw.flush();
 }
 
 pub fn main_validate() !void {
@@ -310,4 +347,61 @@ pub fn parsing_main() !void {
             },
         }
     }
+}
+
+// object_begin
+// object_end
+
+test "hashes algorithm" {
+    const files = [_]struct { u64, []const u8 }{
+        .{ 0, "some/testing/data.ext" },
+    };
+
+    var buf: [1024]u8 = undefined;
+    var buf_end: usize = 0;
+
+    for (files) |file| {
+        const hash, const name = file;
+        var it = mem.splitScalar(u8, name, '/');
+        while (it.next()) |v| {
+            assert(v.len > 0);
+
+            const slice = buf[buf_end..];
+            if (it.peek() == null) {
+                if (slice.len < 3 + v.len + 8) {
+                    return error.NoSpaceLeft;
+                }
+
+                assert(v.len < 256);
+
+                slice[0] = 1;
+                slice[0] = @bitCast(@as(u8, @intCast(v.len)));
+                slice[1] = 1; // hash hash
+                @memcpy(slice[2 .. 2 + v.len], v);
+                slice[2 + v.len ..][0..8].* = @bitCast(hash);
+                slice[2 + v.len + 8] = 0; // end of object
+
+                buf_end += 3 + v.len + 8;
+                break;
+            }
+
+            if (slice.len < 4 + v.len) {
+                return error.NoSpaceLeft;
+            }
+
+            assert(v.len < 256);
+
+            slice[0] = 1; //  object_begin
+            slice[1] = 0; // has hash
+            slice[2] = @bitCast(@as(u8, @intCast(v.len)));
+            @memcpy(slice[3 .. 3 + v.len], v);
+            slice[4 + v.len] = 0; // end of object
+
+            buf_end += 4 + v.len;
+        }
+    }
+
+    std.debug.print("\n", .{});
+    std.debug.print("{s}\n", .{buf[0..buf_end]});
+    std.debug.print("{d}\n", .{buf[0..buf_end]});
 }
