@@ -122,16 +122,13 @@ pub fn main() !void {
     var bw = io.bufferedWriter(out_file.writer());
     const file_writer = bw.writer();
 
-    // this is b shit
-    var map = std.AutoHashMap(u64, struct { ptr: [*]u8, len: usize }).init(allocator);
+    var file_list = std.ArrayList(u8).init(allocator);
+    defer file_list.deinit();
+
+    var map = std.AutoArrayHashMap(u64, struct { usize, usize }).init(allocator);
     defer map.deinit();
 
-    var stored = std.ArrayList(u8).init(allocator);
-    defer stored.deinit();
-
-    var list = std.ArrayList(u64).init(allocator);
-    defer list.deinit();
-
+    // this is b shit
     while (true) {
         if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
             try writer.writeAll(buf[start .. start + pos]);
@@ -145,11 +142,11 @@ pub fn main() !void {
                 const hash = try fastHexParse(u64, line[0..16]);
                 const file = line[17..];
 
-                const index = stored.items.len;
-                try stored.appendSlice(file);
+                const i = file_list.items.len;
 
-                try map.put(hash, .{ .ptr = stored.items.ptr + index, .len = stored.items.len - index });
-                try list.append(hash);
+                // we could prob drop map and just use arr list
+                try file_list.appendSlice(file); // we could use better allocation strategy
+                try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy
             }
             fbs.pos = 0;
 
@@ -164,19 +161,19 @@ pub fn main() !void {
         end = amt;
     }
 
-    std.debug.print("started sorting...\n", .{});
-
     const Context = struct {
-        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            _ = ctx;
-            return a < b;
+        keys: []u64,
+        pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+            return ctx.keys[a_index] < ctx.keys[b_index];
         }
     };
 
-    std.sort.block(u64, list.items, Context{}, Context.lessThan);
-    for (list.items) |k| {
-        const v = map.get(k).?;
-        try file_writer.print("{x:0>16} {s}\n", .{ k, v.ptr[0..v.len] });
+    map.unmanaged.sortUnstableContext(Context{ .keys = map.keys() }, map.ctx);
+    for (map.keys()) |k| {
+        const beg, end = map.get(k).?;
+        const v = file_list.items[beg..end];
+
+        try file_writer.print("{x:0>16} {s}\n", .{ k, v });
     }
 
     try bw.flush();
