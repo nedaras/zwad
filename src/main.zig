@@ -451,6 +451,8 @@ test "hashes algorithm" {
                 buf_start += @intCast(obj_len);
             }
 
+            std.debug.print("writting: {s}\n", .{file[split_start..]});
+
             const write_index = buf_start;
             const write_len = count(file[split_start..]);
 
@@ -458,7 +460,7 @@ test "hashes algorithm" {
             if (buf_end > write_index) {
                 const src = buf[write_index..buf_end];
                 const dst = buf[write_index + write_len .. buf_end + write_len];
-                @memcpy(dst, src);
+                mem.copyBackwards(u8, dst, src);
             }
 
             const len = write(buf[write_index..], file[split_start..]);
