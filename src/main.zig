@@ -128,7 +128,6 @@ pub fn main() !void {
     var map = std.AutoArrayHashMap(u64, struct { usize, usize }).init(allocator);
     defer map.deinit();
 
-    // this is b shit
     while (true) {
         if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
             try writer.writeAll(buf[start .. start + pos]);
@@ -145,8 +144,8 @@ pub fn main() !void {
                 const i = file_list.items.len;
 
                 // we could prob drop map and just use arr list
-                try file_list.appendSlice(file); // we could use better allocation strategy
-                try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy
+                try file_list.appendSlice(file); // we could use better allocation strategy, prob 2n or better n^2
+                try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy, prob 2n or better n^2
             }
             fbs.pos = 0;
 
@@ -169,12 +168,41 @@ pub fn main() !void {
     };
 
     map.unmanaged.sortUnstableContext(Context{ .keys = map.keys() }, map.ctx);
-    for (map.keys()) |k| {
-        const beg, end = map.get(k).?;
-        const v = file_list.items[beg..end];
 
-        try file_writer.print("{x:0>16} {s}\n", .{ k, v });
+    const header_len: u64 = 4 + map.keys().len * (8 + 4 + 2);
+    try out_file.seekTo(header_len);
+    _ = file_writer;
+
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        const beg, end = entry.value_ptr.*;
+
+        const k = entry.key_ptr.*;
+        const v = file_list.items[beg..end];
+        _ = k;
+
+        var splits = mem.splitScalar(u8, v, '/');
+        while (splits.next()) |split| {
+            _ = split;
+            // first walk from top and find unset fields
+        }
     }
+
+    //try file_writer.writeInt(u32, @intCast(map.keys().len), native_endian);
+    //for (map.keys()) |k| {
+    //const beg, end = map.get(k).?;
+    //const v = file_list.items[beg..end];
+
+    //const offset = 0;
+    //const len = 0;
+
+    //try file_writer.writeInt(u64, k, native_endian);
+    //try file_writer.writeInt(u32, offset, native_endian);
+    //try file_writer.writeInt(u16, v.len, native_endian);
+
+    //header_len += 8 + 4 + 2;
+    //try gzip_stream.writer().print("{x:0>16} {s}\n", .{ k, v });
+    //}
 
     try bw.flush();
 }
@@ -349,53 +377,103 @@ pub fn parsing_main() !void {
 // object_begin
 // object_end
 
+fn count(input: []const u8) u32 {
+    assert(input.len > 0);
+
+    // obj_len + str_len + _str + str_len + obj_beg + obj_end
+    const static_len = 4 + 1 + 1 + 1 + 1;
+    if (mem.indexOfScalar(u8, input, '/')) |pos| {
+        return static_len + @as(u32, @intCast(input[0..pos].len)) + count(input[pos + 1 ..]);
+    }
+
+    return static_len + @as(u32, @intCast(input.len));
+}
+
+fn write(buf: []u8, input: []const u8) usize {
+    assert(input.len > 0);
+
+    const split = input[0..(mem.indexOfScalar(u8, input, '/') orelse input.len)];
+    const obj_len = count(input); // just testing, we could just write len direct before ret
+    mem.writeInt(u32, buf[0..4], obj_len, native_endian);
+    buf[4] = @intCast(split.len);
+    @memcpy(buf[5 .. 5 + split.len], split);
+    buf[5 + split.len] = @intCast(split.len);
+    buf[6 + split.len] = 1;
+
+    var len = split.len + 7;
+    if (mem.indexOfScalar(u8, input, '/')) |pos| {
+        len += write(buf[len..], input[pos + 1 ..]);
+    }
+
+    assert(obj_len == len + 1);
+
+    buf[len] = 0;
+    return len + 1;
+}
+
 test "hashes algorithm" {
     const files = [_]struct { u64, []const u8 }{
-        .{ 0, "some/testing/data.ext" },
+        .{ 0, "some/testing/data/file/a" },
+        .{ 0, "some/testing/data/file/b" },
+        .{ 0, "some/testing/data/extra/empty" },
+        .{ 0, "some/testing/data/file/c" },
     };
 
-    var buf: [1024]u8 = undefined;
+    var buf: [16 * 1024]u8 = undefined;
     var buf_end: usize = 0;
 
-    for (files) |file| {
-        const hash, const name = file;
-        var it = mem.splitScalar(u8, name, '/');
-        while (it.next()) |v| {
-            assert(v.len > 0);
+    for (files) |v| {
+        const hash, const file = v;
 
-            const slice = buf[buf_end..];
-            if (it.peek() == null) {
-                if (slice.len < 3 + v.len + 8) {
-                    return error.NoSpaceLeft;
+        var buf_start: usize = 0;
+        var file_start: usize = 0;
+        var stack = std.ArrayList(usize).init(std.testing.allocator);
+        defer stack.deinit();
+        outer: while (file_start != file.len) {
+            const split_start = file_start;
+            const split_end: usize = if (mem.indexOfScalar(u8, file[file_start..], '/')) |pos| split_start + pos else file.len;
+            const split = file[split_start..split_end];
+
+            assert(split.len > 0);
+
+            while (buf_end > buf_start and buf[buf_start] != 0) {
+                const obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
+                const str_len = buf[buf_start + 4];
+                const str = buf[buf_start + 4 + 1 .. buf_start + 4 + 1 + str_len];
+
+                if (mem.eql(u8, str, split)) {
+                    try stack.append(buf_start);
+                    buf_start += 4 + 1 + str_len + 1 + 1;
+                    file_start += split.len + 1;
+                    continue :outer;
                 }
 
-                assert(v.len < 256);
-
-                slice[0] = 1;
-                slice[0] = @bitCast(@as(u8, @intCast(v.len)));
-                slice[1] = 1; // hash hash
-                @memcpy(slice[2 .. 2 + v.len], v);
-                slice[2 + v.len ..][0..8].* = @bitCast(hash);
-                slice[2 + v.len + 8] = 0; // end of object
-
-                buf_end += 3 + v.len + 8;
-                break;
+                buf_start += @intCast(obj_len);
             }
 
-            if (slice.len < 4 + v.len) {
-                return error.NoSpaceLeft;
+            const write_index = buf_start;
+            const write_len = count(file[split_start..]);
+
+            assert(buf_end >= write_index);
+            if (buf_end > write_index) {
+                const src = buf[write_index..buf_end];
+                const dst = buf[write_index + write_len .. buf_end + write_len];
+                @memcpy(dst, src);
             }
 
-            assert(v.len < 256);
+            const len = write(buf[write_index..], file[split_start..]);
 
-            slice[0] = 1; //  object_begin
-            slice[1] = 0; // has hash
-            slice[2] = @bitCast(@as(u8, @intCast(v.len)));
-            @memcpy(slice[3 .. 3 + v.len], v);
-            slice[4 + v.len] = 0; // end of object
+            assert(write_len == len);
 
-            buf_end += 4 + v.len;
+            for (stack.items) |frame_start| {
+                const frame_len = mem.readInt(u32, buf[frame_start..][0..4], native_endian);
+                mem.writeInt(u32, buf[frame_start..][0..4], frame_len + @as(u32, @intCast(len)), native_endian);
+            }
+
+            file_start = file.len;
+            buf_end += @intCast(len);
         }
+        _ = hash;
     }
 
     std.debug.print("\n", .{});
