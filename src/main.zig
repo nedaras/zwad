@@ -7,6 +7,7 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const win = std.os.windows;
 const native_endian = @import("builtin").target.cpu.arch.endian();
+const Hashes = @import("Hashes.zig");
 
 extern "kernel32" fn CreateFileMappingA(hFile: win.HANDLE, ?*anyopaque, flProtect: win.DWORD, dwMaximumSizeHigh: win.DWORD, dwMaximumSizeLow: win.DWORD, lpName: ?win.LPCSTR) callconv(win.WINAPI) ?win.HANDLE;
 
@@ -80,6 +81,56 @@ pub fn main() !void {
 
     const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
 
+    const file = try fs.cwd().openFile("testing.txt", .{});
+    defer file.close();
+
+    const file_len = try file.getEndPos();
+    const maping = CreateFileMappingA(file.handle, null, win.PAGE_READONLY, 0, 0, null).?;
+    defer win.CloseHandle(maping);
+
+    const file_buf = MapViewOfFile(maping, 0x4, 0, 0, 0).?;
+    defer _ = UnmapViewOfFile(file_buf);
+
+    const slice = file_buf[0..file_len];
+
+    var hashes = Hashes.init(allocator);
+    defer hashes.deinit();
+    try hashes.data.ensureTotalCapacity(allocator, 1024 * 1024);
+
+    var it = mem.splitSequence(u8, slice, "\r\n");
+    while (it.next()) |line| {
+        try hashes.update(0, line);
+    }
+
+    printPaths(hashes.data.items);
+    //std.debug.print("{s}\n", .{hashes.data.items});
+    //std.debug.print("{d}\n", .{hashes.data.items});
+}
+
+fn printPaths(buf: []u8) void {
+    if (buf[0] == 0) return;
+    const obj_len = mem.readInt(u32, buf[0..4], native_endian);
+    assert(buf.len == obj_len);
+
+    const str_len = buf[4];
+    const str = .{buf[5 .. 5 + str_len]};
+
+    std.debug.print("{s}\n", str);
+
+    var buf_start: usize = 4 + 1 + str_len + 1 + 1;
+    while (buf[buf_start] != 0) {
+        const child_obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
+        printPaths(buf[buf_start .. buf_start + child_obj_len]);
+        buf_start += child_obj_len;
+    }
+}
+
+pub fn main_hashes() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
+
     var client = std.http.Client{
         .allocator = allocator,
     };
@@ -119,14 +170,17 @@ pub fn main() !void {
     const out_file = try fs.cwd().createFile(".hashes", .{}); // mb maping would prob be better, cuz on falure we would not have corrupted .hashes file
     defer out_file.close();
 
-    var bw = io.bufferedWriter(out_file.writer());
-    const file_writer = bw.writer();
+    //var bw = io.bufferedWriter(out_file.writer());
+    //const file_writer = bw.writer();
 
-    var file_list = std.ArrayList(u8).init(allocator);
-    defer file_list.deinit();
+    //var file_list = std.ArrayList(u8).init(allocator);
+    //defer file_list.deinit();
 
-    var map = std.AutoArrayHashMap(u64, struct { usize, usize }).init(allocator);
-    defer map.deinit();
+    //var map = std.AutoArrayHashMap(u64, struct { usize, usize }).init(allocator);
+    //defer map.deinit();
+
+    var hashes = Hashes.init(allocator);
+    defer hashes.deinit();
 
     while (true) {
         if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
@@ -140,12 +194,15 @@ pub fn main() !void {
 
                 const hash = try fastHexParse(u64, line[0..16]);
                 const file = line[17..];
+                _ = hash;
 
-                const i = file_list.items.len;
+                std.debug.print("{s}\n", .{file});
+
+                //try hashes.update(hash, file);
 
                 // we could prob drop map and just use arr list
-                try file_list.appendSlice(file); // we could use better allocation strategy, prob 2n or better n^2
-                try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy, prob 2n or better n^2
+                //try file_list.appendSlice(file); // we could use better allocation strategy, prob 2n or better n^2
+                //try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy, prob 2n or better n^2
             }
             fbs.pos = 0;
 
@@ -153,58 +210,17 @@ pub fn main() !void {
         }
         try writer.writeAll(buf[start..end]);
 
-        const amt = try req.read(buf[0..]);
+        const amt = req.read(buf[0..]) catch |err| {
+            try out_file.writeAll(hashes.data.items);
+            return err;
+        };
         if (amt == 0) break; //return error.EndOfStream;
 
         start = 0;
         end = amt;
     }
 
-    const Context = struct {
-        keys: []u64,
-        pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-            return ctx.keys[a_index] < ctx.keys[b_index];
-        }
-    };
-
-    map.unmanaged.sortUnstableContext(Context{ .keys = map.keys() }, map.ctx);
-
-    const header_len: u64 = 4 + map.keys().len * (8 + 4 + 2);
-    try out_file.seekTo(header_len);
-    _ = file_writer;
-
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        const beg, end = entry.value_ptr.*;
-
-        const k = entry.key_ptr.*;
-        const v = file_list.items[beg..end];
-        _ = k;
-
-        var splits = mem.splitScalar(u8, v, '/');
-        while (splits.next()) |split| {
-            _ = split;
-            // first walk from top and find unset fields
-        }
-    }
-
-    //try file_writer.writeInt(u32, @intCast(map.keys().len), native_endian);
-    //for (map.keys()) |k| {
-    //const beg, end = map.get(k).?;
-    //const v = file_list.items[beg..end];
-
-    //const offset = 0;
-    //const len = 0;
-
-    //try file_writer.writeInt(u64, k, native_endian);
-    //try file_writer.writeInt(u32, offset, native_endian);
-    //try file_writer.writeInt(u16, v.len, native_endian);
-
-    //header_len += 8 + 4 + 2;
-    //try gzip_stream.writer().print("{x:0>16} {s}\n", .{ k, v });
-    //}
-
-    try bw.flush();
+    try out_file.writeAll(hashes.data.items);
 }
 
 pub fn main_validate() !void {
@@ -380,7 +396,8 @@ pub fn parsing_main() !void {
 fn count(input: []const u8) u32 {
     assert(input.len > 0);
 
-    // obj_len + str_len + _str + str_len + obj_beg + obj_end
+    // obj_len + str_len + _str + str_len + obj_beg +  obj_end
+    // add like an offset to upper frame
     const static_len = 4 + 1 + 1 + 1 + 1;
     if (mem.indexOfScalar(u8, input, '/')) |pos| {
         return static_len + @as(u32, @intCast(input[0..pos].len)) + count(input[pos + 1 ..]);
@@ -411,6 +428,23 @@ fn write(buf: []u8, input: []const u8) usize {
     return len + 1;
 }
 
+fn update(buf: []u8, obj_beg: u32) void {
+    if (buf[0] == 0) return;
+    const obj_len = mem.readInt(u32, buf[0..4], native_endian);
+    assert(buf.len == obj_len);
+
+    const str_len = buf[4];
+    //const str = buf[5 .. 5 + str_len];
+    mem.writeInt(u32, buf[0..4], obj_beg, native_endian);
+
+    var buf_start: usize = 4 + 1 + str_len + 1 + 1;
+    while (buf[buf_start] != 0) {
+        const child_obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
+        update(buf[buf_start .. buf_start + child_obj_len], @intCast(buf_start));
+        buf_start += child_obj_len;
+    }
+}
+
 test "hashes algorithm" {
     const files = [_]struct { u64, []const u8 }{
         .{ 0, "some/testing/data/file/a" },
@@ -422,13 +456,13 @@ test "hashes algorithm" {
     var buf: [16 * 1024]u8 = undefined;
     var buf_end: usize = 0;
 
+    var frames = std.ArrayList(usize).init(std.testing.allocator);
+    defer frames.deinit();
     for (files) |v| {
         const hash, const file = v;
 
         var buf_start: usize = 0;
         var file_start: usize = 0;
-        var stack = std.ArrayList(usize).init(std.testing.allocator);
-        defer stack.deinit();
         outer: while (file_start != file.len) {
             const split_start = file_start;
             const split_end: usize = if (mem.indexOfScalar(u8, file[file_start..], '/')) |pos| split_start + pos else file.len;
@@ -442,7 +476,7 @@ test "hashes algorithm" {
                 const str = buf[buf_start + 4 + 1 .. buf_start + 4 + 1 + str_len];
 
                 if (mem.eql(u8, str, split)) {
-                    try stack.append(buf_start);
+                    try frames.append(buf_start);
                     buf_start += 4 + 1 + str_len + 1 + 1;
                     file_start += split.len + 1;
                     continue :outer;
@@ -450,8 +484,6 @@ test "hashes algorithm" {
 
                 buf_start += @intCast(obj_len);
             }
-
-            std.debug.print("writting: {s}\n", .{file[split_start..]});
 
             const write_index = buf_start;
             const write_len = count(file[split_start..]);
@@ -467,18 +499,30 @@ test "hashes algorithm" {
 
             assert(write_len == len);
 
-            for (stack.items) |frame_start| {
+            for (frames.items) |frame_start| {
                 const frame_len = mem.readInt(u32, buf[frame_start..][0..4], native_endian);
                 mem.writeInt(u32, buf[frame_start..][0..4], frame_len + @as(u32, @intCast(len)), native_endian);
             }
 
             file_start = file.len;
             buf_end += @intCast(len);
+
+            frames.clearRetainingCapacity();
         }
         _ = hash;
     }
 
-    std.debug.print("\n", .{});
-    std.debug.print("{s}\n", .{buf[0..buf_end]});
-    std.debug.print("{d}\n", .{buf[0..buf_end]});
+    update(buf[0..buf_end], 0);
+
+    var hashes = Hashes.init(std.testing.allocator);
+    defer hashes.deinit();
+
+    try hashes.update(0, "some/testing/data/file/a");
+    try hashes.update(0, "some/testing/data/file/b");
+    try hashes.update(0, "some/testing/data/extra/empty");
+    try hashes.update(0, "some/testing/data/file/c");
+
+    const final = hashes.final();
+
+    try std.testing.expectEqualStrings(buf[0..buf_end], final);
 }
