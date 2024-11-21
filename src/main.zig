@@ -75,7 +75,7 @@ fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but id
     return result;
 }
 
-pub fn main() !void {
+pub fn main_tst() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -102,30 +102,30 @@ pub fn main() !void {
         try hashes.update(0, line);
     }
 
-    printPaths(hashes.data.items);
+    printPaths(allocator, hashes.data.items);
     //std.debug.print("{s}\n", .{hashes.data.items});
     //std.debug.print("{d}\n", .{hashes.data.items});
 }
 
-fn printPaths(buf: []u8) void {
-    if (buf[0] == 0) return;
-    const obj_len = mem.readInt(u32, buf[0..4], native_endian);
-    assert(buf.len == obj_len);
+fn printPaths(allocator: std.mem.Allocator, buf: []const u8) void {
+    const file = std.ArrayList(u8).init(allocator);
+    defer file.deinit();
 
-    const str_len = buf[4];
-    const str = .{buf[5 .. 5 + str_len]};
+    var buf_start: usize = 0;
+    const block_end = buf.len;
+    while (block_end > buf_start) {
+        //const obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
+        //const str_len = buf[buf_start + 4];
+        const str_len = mem.readInt(u16, buf[buf_start + 4 ..][0..2], native_endian);
+        const str = buf[buf_start + 4 + 2 .. buf_start + 4 + 2 + str_len];
 
-    std.debug.print("{s}\n", str);
+        std.debug.print("{s}\n", .{str});
 
-    var buf_start: usize = 4 + 1 + str_len + 1 + 1;
-    while (buf[buf_start] != 0) {
-        const child_obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
-        printPaths(buf[buf_start .. buf_start + child_obj_len]);
-        buf_start += child_obj_len;
+        buf_start += 4 + 2 + str_len;
     }
 }
 
-pub fn main_hashes() !void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -194,15 +194,8 @@ pub fn main_hashes() !void {
 
                 const hash = try fastHexParse(u64, line[0..16]);
                 const file = line[17..];
-                _ = hash;
 
-                std.debug.print("{s}\n", .{file});
-
-                //try hashes.update(hash, file);
-
-                // we could prob drop map and just use arr list
-                //try file_list.appendSlice(file); // we could use better allocation strategy, prob 2n or better n^2
-                //try map.put(hash, .{ i, file_list.items.len }); // we could use better allocation strategy, prob 2n or better n^2
+                try hashes.update(hash, file);
             }
             fbs.pos = 0;
 
@@ -220,6 +213,7 @@ pub fn main_hashes() !void {
         end = amt;
     }
 
+    std.debug.print("writting to file: {d}\n", .{hashes.data.items.len});
     try out_file.writeAll(hashes.data.items);
 }
 
@@ -388,141 +382,4 @@ pub fn parsing_main() !void {
             },
         }
     }
-}
-
-// object_begin
-// object_end
-
-fn count(input: []const u8) u32 {
-    assert(input.len > 0);
-
-    // obj_len + str_len + _str + str_len + obj_beg +  obj_end
-    // add like an offset to upper frame
-    const static_len = 4 + 1 + 1 + 1 + 1;
-    if (mem.indexOfScalar(u8, input, '/')) |pos| {
-        return static_len + @as(u32, @intCast(input[0..pos].len)) + count(input[pos + 1 ..]);
-    }
-
-    return static_len + @as(u32, @intCast(input.len));
-}
-
-fn write(buf: []u8, input: []const u8) usize {
-    assert(input.len > 0);
-
-    const split = input[0..(mem.indexOfScalar(u8, input, '/') orelse input.len)];
-    const obj_len = count(input); // just testing, we could just write len direct before ret
-    mem.writeInt(u32, buf[0..4], obj_len, native_endian);
-    buf[4] = @intCast(split.len);
-    @memcpy(buf[5 .. 5 + split.len], split);
-    buf[5 + split.len] = @intCast(split.len);
-    buf[6 + split.len] = 1;
-
-    var len = split.len + 7;
-    if (mem.indexOfScalar(u8, input, '/')) |pos| {
-        len += write(buf[len..], input[pos + 1 ..]);
-    }
-
-    assert(obj_len == len + 1);
-
-    buf[len] = 0;
-    return len + 1;
-}
-
-fn update(buf: []u8, obj_beg: u32) void {
-    if (buf[0] == 0) return;
-    const obj_len = mem.readInt(u32, buf[0..4], native_endian);
-    assert(buf.len == obj_len);
-
-    const str_len = buf[4];
-    //const str = buf[5 .. 5 + str_len];
-    mem.writeInt(u32, buf[0..4], obj_beg, native_endian);
-
-    var buf_start: usize = 4 + 1 + str_len + 1 + 1;
-    while (buf[buf_start] != 0) {
-        const child_obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
-        update(buf[buf_start .. buf_start + child_obj_len], @intCast(buf_start));
-        buf_start += child_obj_len;
-    }
-}
-
-test "hashes algorithm" {
-    const files = [_]struct { u64, []const u8 }{
-        .{ 0, "some/testing/data/file/a" },
-        .{ 0, "some/testing/data/file/b" },
-        .{ 0, "some/testing/data/extra/empty" },
-        .{ 0, "some/testing/data/file/c" },
-    };
-
-    var buf: [16 * 1024]u8 = undefined;
-    var buf_end: usize = 0;
-
-    var frames = std.ArrayList(usize).init(std.testing.allocator);
-    defer frames.deinit();
-    for (files) |v| {
-        const hash, const file = v;
-
-        var buf_start: usize = 0;
-        var file_start: usize = 0;
-        outer: while (file_start != file.len) {
-            const split_start = file_start;
-            const split_end: usize = if (mem.indexOfScalar(u8, file[file_start..], '/')) |pos| split_start + pos else file.len;
-            const split = file[split_start..split_end];
-
-            assert(split.len > 0);
-
-            while (buf_end > buf_start and buf[buf_start] != 0) {
-                const obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
-                const str_len = buf[buf_start + 4];
-                const str = buf[buf_start + 4 + 1 .. buf_start + 4 + 1 + str_len];
-
-                if (mem.eql(u8, str, split)) {
-                    try frames.append(buf_start);
-                    buf_start += 4 + 1 + str_len + 1 + 1;
-                    file_start += split.len + 1;
-                    continue :outer;
-                }
-
-                buf_start += @intCast(obj_len);
-            }
-
-            const write_index = buf_start;
-            const write_len = count(file[split_start..]);
-
-            assert(buf_end >= write_index);
-            if (buf_end > write_index) {
-                const src = buf[write_index..buf_end];
-                const dst = buf[write_index + write_len .. buf_end + write_len];
-                mem.copyBackwards(u8, dst, src);
-            }
-
-            const len = write(buf[write_index..], file[split_start..]);
-
-            assert(write_len == len);
-
-            for (frames.items) |frame_start| {
-                const frame_len = mem.readInt(u32, buf[frame_start..][0..4], native_endian);
-                mem.writeInt(u32, buf[frame_start..][0..4], frame_len + @as(u32, @intCast(len)), native_endian);
-            }
-
-            file_start = file.len;
-            buf_end += @intCast(len);
-
-            frames.clearRetainingCapacity();
-        }
-        _ = hash;
-    }
-
-    update(buf[0..buf_end], 0);
-
-    var hashes = Hashes.init(std.testing.allocator);
-    defer hashes.deinit();
-
-    try hashes.update(0, "some/testing/data/file/a");
-    try hashes.update(0, "some/testing/data/file/b");
-    try hashes.update(0, "some/testing/data/extra/empty");
-    try hashes.update(0, "some/testing/data/file/c");
-
-    const final = hashes.final();
-
-    try std.testing.expectEqualStrings(buf[0..buf_end], final);
 }

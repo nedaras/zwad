@@ -2,6 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
+const math = std.math;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 
 const Self = @This();
@@ -24,6 +25,8 @@ pub fn deinit(self: *Self) void {
 // todo: add lots of asserts and remove recursion
 
 pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
+    if (mem.startsWith(u8, path, "assets/sounds/wwise//")) return;
+
     var buf: [4 * 1024]u8 = undefined;
     var stack_allocator = std.heap.FixedBufferAllocator.init(&buf);
 
@@ -32,23 +35,30 @@ pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
 
     var buf_start: usize = 0;
     var path_start: usize = 0;
+
+    var block_end = self.data.items.len;
     outer: while (path_start != path.len) {
         const split_start = path_start;
         const split_end: usize = if (mem.indexOfScalar(u8, path[path_start..], '/')) |pos| split_start + pos else path.len;
         const split = path[split_start..split_end];
 
-        assert(split.len > 0);
-        assert(split.len <= 255);
+        if (split.len <= 0) {
+            std.debug.print("{s}\n", .{path});
+            std.debug.print("data_len: {d}\n", .{self.data.items.len});
+        }
 
-        // found problem - when size becomes smth, like [0x00, 0x10, 0x00, 0x00], we think its enf of object
-        while (self.data.items.len > buf_start and self.data.items[buf_start] != 0) {
+        assert(split.len > 0);
+        assert(split.len <= math.maxInt(u16));
+
+        while (block_end > buf_start) { //  bench
             const obj_len = mem.readInt(u32, self.data.items[buf_start..][0..4], native_endian);
-            const str_len = self.data.items[buf_start + 4];
-            const str = self.data.items[buf_start + 4 + 1 .. buf_start + 4 + 1 + str_len];
+            const str_len = mem.readInt(u16, self.data.items[buf_start + 4 ..][0..2], native_endian);
+            const str = self.data.items[buf_start + 4 + 2 .. buf_start + 4 + 2 + str_len];
 
             if (mem.eql(u8, str, split)) {
                 try frames.append(buf_start);
-                buf_start += 4 + 1 + str_len + 1 + 1;
+                block_end = buf_start + obj_len;
+                buf_start += 4 + 2 + str_len;
                 path_start += split.len + 1;
                 continue :outer;
             }
@@ -56,10 +66,8 @@ pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
             buf_start += @intCast(obj_len);
         }
 
-        std.debug.print("full: {s}, writting: {s}\n", .{ path[0..split_start], path[split_start..] });
-
         const write_index = buf_start;
-        const write_len = count(path[split_start..]); // can be expensi, prob can optimize
+        const write_len = count(path[split_start..]);
 
         const buf_end = self.data.items.len;
         assert(buf_end >= write_index);
@@ -70,10 +78,10 @@ pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
         if (buf_end > write_index) {
             const dst = self.data.items[write_index + write_len .. buf_end + write_len];
             const src = self.data.items[write_index..buf_end];
-            mem.copyBackwards(u8, dst, src); // prob is very expensive, prob need to add like rope algo
+            mem.copyBackwards(u8, dst, src); // bench
         }
 
-        const len = write(self.data.items[write_index..], path[split_start..]); // prob expensive
+        const len = write(self.data.items[write_index..], path[split_start..]); // bench
 
         assert(write_len == len);
 
@@ -83,8 +91,6 @@ pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
         }
 
         path_start = path.len;
-        //buf_end += @intCast(len);
-
         frames.clearRetainingCapacity();
     }
     _ = hash;
@@ -98,47 +104,38 @@ pub fn final(self: Self) []u8 {
 fn count(input: []const u8) u32 {
     assert(input.len > 0);
 
-    // obj_len + str_len + _str + str_len + obj_beg +  obj_end
-    // add like an offset to upper frame
-    const static_len = 4 + 1 + 1 + 1 + 1;
-    if (mem.indexOfScalar(u8, input, '/')) |pos| {
-        return static_len + @as(u32, @intCast(input[0..pos].len)) + count(input[pos + 1 ..]);
-    }
+    var len: u32 = 0;
+    var it = mem.splitScalar(u8, input, '/');
+    while (it.next()) |v| {
+        assert(v.len > 0);
+        assert(v.len <= math.maxInt(u16));
 
-    return static_len + @as(u32, @intCast(input.len));
+        len += 4 + 2 + @as(u32, @intCast(v.len));
+    }
+    return len;
 }
 
-fn write(buf: []u8, input: []const u8) usize {
+fn write(buf: []u8, input: []const u8) u32 {
     assert(input.len > 0);
 
     const split = input[0..(mem.indexOfScalar(u8, input, '/') orelse input.len)];
-    buf[4] = @intCast(split.len);
-    @memcpy(buf[5 .. 5 + split.len], split);
-    buf[5 + split.len] = @intCast(split.len);
-    buf[6 + split.len] = 1;
+    assert(split.len > 0);
+    assert(split.len <= math.maxInt(u16));
 
-    var len = split.len + 7;
+    //buf[4] = @intCast(split.len);
+    mem.writeInt(u16, buf[4..6], @intCast(split.len), native_endian);
+    @memcpy(buf[6 .. 6 + split.len], split);
+
+    var len = 4 + 2 + @as(u32, @intCast(split.len));
     if (mem.indexOfScalar(u8, input, '/')) |pos| {
         len += write(buf[len..], input[pos + 1 ..]);
     }
 
-    mem.writeInt(u32, buf[0..4], @intCast(len + 1), native_endian);
-    buf[len] = 0;
-    return len + 1;
+    mem.writeInt(u32, buf[0..4], @intCast(len), native_endian);
+    return len;
 }
 
 fn setOffsets(buf: []u8, obj_beg: u32) void {
-    if (buf[0] == 0) return;
-    const obj_len = mem.readInt(u32, buf[0..4], native_endian);
-    assert(buf.len == obj_len);
-
-    const str_len = buf[4];
-    mem.writeInt(u32, buf[0..4], obj_beg, native_endian);
-
-    var buf_start: usize = 4 + 1 + str_len + 1 + 1;
-    while (buf[buf_start] != 0) {
-        const child_obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
-        setOffsets(buf[buf_start .. buf_start + child_obj_len], @intCast(buf_start));
-        buf_start += child_obj_len;
-    }
+    _ = buf;
+    _ = obj_beg;
 }
