@@ -116,12 +116,20 @@ fn printPaths(allocator: std.mem.Allocator, buf: []const u8) void {
     while (block_end > buf_start) {
         //const obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
         //const str_len = buf[buf_start + 4];
-        const str_len = mem.readInt(u16, buf[buf_start + 4 ..][0..2], native_endian);
-        const str = buf[buf_start + 4 + 2 .. buf_start + 4 + 2 + str_len];
+        const str_bytes: u8 = switch (buf[buf_start + 4]) {
+            255 => 2,
+            else => 1,
+        };
+        const str_len: u16 = switch (buf[buf_start + 4]) {
+            255 => mem.readInt(u16, buf[buf_start + 4 ..][0..2], native_endian),
+            else => @intCast(buf[buf_start + 4]),
+        };
+
+        const str = buf[buf_start + 4 + str_bytes .. buf_start + 4 + str_bytes + str_len];
 
         std.debug.print("{s}\n", .{str});
 
-        buf_start += 4 + 2 + str_len;
+        buf_start += 4 + str_bytes + str_len;
     }
 }
 

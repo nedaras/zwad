@@ -52,13 +52,21 @@ pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
 
         while (block_end > buf_start) { //  bench
             const obj_len = mem.readInt(u32, self.data.items[buf_start..][0..4], native_endian);
-            const str_len = mem.readInt(u16, self.data.items[buf_start + 4 ..][0..2], native_endian);
-            const str = self.data.items[buf_start + 4 + 2 .. buf_start + 4 + 2 + str_len];
+            const str_bytes: u8 = switch (self.data.items[buf_start + 4]) {
+                255 => 2,
+                else => 1,
+            };
+            const str_len: u16 = switch (self.data.items[buf_start + 4]) {
+                255 => mem.readInt(u16, self.data.items[buf_start + 4 ..][0..2], native_endian),
+                else => @intCast(self.data.items[buf_start + 4]),
+            };
+
+            const str = self.data.items[buf_start + 4 + str_bytes .. buf_start + 4 + str_bytes + str_len];
 
             if (mem.eql(u8, str, split)) {
                 try frames.append(buf_start);
                 block_end = buf_start + obj_len;
-                buf_start += 4 + 2 + str_len;
+                buf_start += 4 + str_bytes + str_len;
                 path_start += split.len + 1;
                 continue :outer;
             }
@@ -110,7 +118,8 @@ fn count(input: []const u8) u32 {
         assert(v.len > 0);
         assert(v.len <= math.maxInt(u16));
 
-        len += 4 + 2 + @as(u32, @intCast(v.len));
+        const str_bytes: u8 = if (v.len > 254) 2 else 1;
+        len += 4 + str_bytes + @as(u32, @intCast(v.len));
     }
     return len;
 }
@@ -123,10 +132,18 @@ fn write(buf: []u8, input: []const u8) u32 {
     assert(split.len <= math.maxInt(u16));
 
     //buf[4] = @intCast(split.len);
-    mem.writeInt(u16, buf[4..6], @intCast(split.len), native_endian);
-    @memcpy(buf[6 .. 6 + split.len], split);
+    const str_bytes: u8 = if (split.len > 254) 2 else 1; //  todo: use zero, not 254, cuz zero sized string should not be a thing
+    switch (str_bytes) {
+        1 => buf[4] = @intCast(split.len),
+        2 => {
+            buf[4] = 255;
+            mem.writeInt(u16, buf[4..6], @intCast(split.len), native_endian);
+        },
+        else => unreachable,
+    }
 
-    var len = 4 + 2 + @as(u32, @intCast(split.len));
+    @memcpy(buf[4 + str_bytes .. 4 + str_bytes + split.len], split);
+    var len = 4 + str_bytes + @as(u32, @intCast(split.len));
     if (mem.indexOfScalar(u8, input, '/')) |pos| {
         len += write(buf[len..], input[pos + 1 ..]);
     }
