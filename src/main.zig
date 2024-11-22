@@ -51,37 +51,8 @@ const Entry = packed struct {
     checksum: u64,
 };
 
-fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
-    var result: T = 0;
-
-    for (buf) |ch| {
-        var mask: T = undefined;
-
-        if (ch >= '0' and ch <= '9') {
-            mask = ch - '0';
-        } else if (ch >= 'a' and ch <= 'f') {
-            mask = ch - 'a' + 10;
-        } else {
-            return error.InvalidCharacter;
-        }
-
-        if (result > std.math.maxInt(T) >> 4) {
-            return error.Overflow;
-        }
-
-        result = (result << 4) | mask;
-    }
-
-    return result;
-}
-
-pub fn main_tst() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
-    defer _ = gpa.deinit();
-
-    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
-
-    const file = try fs.cwd().openFile("testing.txt", .{});
+pub fn main() !void {
+    const file = try fs.cwd().openFile(".hashes", .{});
     defer file.close();
 
     const file_len = try file.getEndPos();
@@ -91,49 +62,26 @@ pub fn main_tst() !void {
     const file_buf = MapViewOfFile(maping, 0x4, 0, 0, 0).?;
     defer _ = UnmapViewOfFile(file_buf);
 
+    var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
     const slice = file_buf[0..file_len];
+    const reader = file_stream.reader();
 
-    var hashes = Hashes.init(allocator);
-    defer hashes.deinit();
-    try hashes.data.ensureTotalCapacity(allocator, 1024 * 1024);
+    const hashes_len = try reader.readInt(u32, .little);
+    for (0..hashes_len) |_| {
+        const hash = try reader.readInt(u64, .little);
+        const offset = try reader.readInt(u32, .little);
 
-    var it = mem.splitSequence(u8, slice, "\r\n");
-    while (it.next()) |line| {
-        try hashes.update(0, line);
-    }
-
-    printPaths(allocator, hashes.data.items);
-    //std.debug.print("{s}\n", .{hashes.data.items});
-    //std.debug.print("{d}\n", .{hashes.data.items});
-}
-
-fn printPaths(allocator: std.mem.Allocator, buf: []const u8) void {
-    const file = std.ArrayList(u8).init(allocator);
-    defer file.deinit();
-
-    var buf_start: usize = 0;
-    const block_end = buf.len;
-    while (block_end > buf_start) {
-        //const obj_len = mem.readInt(u32, buf[buf_start..][0..4], native_endian);
-        //const str_len = buf[buf_start + 4];
-        const str_bytes: u8 = switch (buf[buf_start + 4]) {
-            255 => 2,
-            else => 1,
-        };
-        const str_len: u16 = switch (buf[buf_start + 4]) {
-            255 => mem.readInt(u16, buf[buf_start + 4 ..][0..2], native_endian),
-            else => @intCast(buf[buf_start + 4]),
-        };
-
-        const str = buf[buf_start + 4 + str_bytes .. buf_start + 4 + str_bytes + str_len];
-
-        std.debug.print("{s}\n", .{str});
-
-        buf_start += 4 + str_bytes + str_len;
+        const path_len = mem.readInt(u16, slice[offset..][0..2], .little);
+        const path = slice[offset + 2 .. offset + 2 + path_len];
+        if (path_len > 255) {
+            std.debug.print("0x{X} {s}\n", .{ hash, path[0..255] });
+        } else {
+            std.debug.print("0x{X} {s}\n", .{ hash, path });
+        }
     }
 }
 
-pub fn main() !void {
+pub fn main_buildhashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -178,15 +126,6 @@ pub fn main() !void {
     const out_file = try fs.cwd().createFile(".hashes", .{}); // mb maping would prob be better, cuz on falure we would not have corrupted .hashes file
     defer out_file.close();
 
-    //var bw = io.bufferedWriter(out_file.writer());
-    //const file_writer = bw.writer();
-
-    //var file_list = std.ArrayList(u8).init(allocator);
-    //defer file_list.deinit();
-
-    //var map = std.AutoArrayHashMap(u64, struct { usize, usize }).init(allocator);
-    //defer map.deinit();
-
     var hashes = Hashes.init(allocator);
     defer hashes.deinit();
 
@@ -221,8 +160,13 @@ pub fn main() !void {
         end = amt;
     }
 
-    std.debug.print("writting to file: {d}\n", .{hashes.data.items.len});
-    try out_file.writeAll(hashes.data.items);
+    std.debug.print("finalizing\n", .{});
+
+    const final = try hashes.final();
+
+    // if decompression is fast, we could store it compressed .hashes file would be only 5000kb then
+    std.debug.print("writting to file: {d}\n", .{final.len});
+    try out_file.writeAll(final);
 }
 
 pub fn main_validate() !void {
@@ -390,4 +334,28 @@ pub fn parsing_main() !void {
             },
         }
     }
+}
+
+fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
+    var result: T = 0;
+
+    for (buf) |ch| {
+        var mask: T = undefined;
+
+        if (ch >= '0' and ch <= '9') {
+            mask = ch - '0';
+        } else if (ch >= 'a' and ch <= 'f') {
+            mask = ch - 'a' + 10;
+        } else {
+            return error.InvalidCharacter;
+        }
+
+        if (result > std.math.maxInt(T) >> 4) {
+            return error.Overflow;
+        }
+
+        result = (result << 4) | mask;
+    }
+
+    return result;
 }

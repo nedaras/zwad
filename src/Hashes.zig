@@ -3,156 +3,83 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 const math = std.math;
-const native_endian = @import("builtin").target.cpu.arch.endian();
 
 const Self = @This();
+const Hashes = std.AutoArrayHashMapUnmanaged(u64, u32);
 const Data = std.ArrayListUnmanaged(u8);
 
 allocator: Allocator,
-data: Data,
+hashes: Hashes = Hashes{},
+data: Data = Data{},
+finalized: bool = false,
 
 pub fn init(allocator: Allocator) Self {
     return .{
         .allocator = allocator,
-        .data = Data{},
     };
 }
 
 pub fn deinit(self: *Self) void {
+    self.hashes.deinit(self.allocator);
     self.data.deinit(self.allocator);
 }
 
-// todo: add lots of asserts and remove recursion
+const UpdateError = error{
+    NameTooLong,
+    AlreadyExists,
+} || Allocator.Error;
 
-pub fn update(self: *Self, hash: u64, path: []const u8) Allocator.Error!void {
-    if (mem.startsWith(u8, path, "assets/sounds/wwise//")) return;
+pub fn update(self: *Self, hash: u64, path: []const u8) UpdateError!void {
+    assert(!self.finalized);
+    assert(path.len > 0);
 
-    var buf: [4 * 1024]u8 = undefined;
-    var stack_allocator = std.heap.FixedBufferAllocator.init(&buf);
+    if (path.len > math.maxInt(u64)) return error.NameTooLong;
+    assert(math.maxInt(u32) >= self.data.items.len + 2 + path.len); // 2 bytes for byte_len
+    if (self.hashes.get(hash) != null) return error.AlreadyExists;
 
-    var frames = std.ArrayList(usize).init(stack_allocator.allocator());
-    defer frames.deinit();
+    const path_len: u16 = @intCast(path.len);
+    const pos: u32 = @intCast(self.data.items.len);
 
-    var buf_start: usize = 0;
-    var path_start: usize = 0;
+    try self.hashes.put(self.allocator, hash, pos);
 
-    var block_end = self.data.items.len;
-    outer: while (path_start != path.len) {
-        const split_start = path_start;
-        const split_end: usize = if (mem.indexOfScalar(u8, path[path_start..], '/')) |pos| split_start + pos else path.len;
-        const split = path[split_start..split_end];
-
-        if (split.len <= 0) {
-            std.debug.print("{s}\n", .{path});
-            std.debug.print("data_len: {d}\n", .{self.data.items.len});
-        }
-
-        assert(split.len > 0);
-        assert(split.len <= math.maxInt(u16));
-
-        while (block_end > buf_start) { //  bench
-            const obj_len = mem.readInt(u32, self.data.items[buf_start..][0..4], native_endian);
-            const str_bytes: u8 = switch (self.data.items[buf_start + 4]) {
-                255 => 2,
-                else => 1,
-            };
-            const str_len: u16 = switch (self.data.items[buf_start + 4]) {
-                255 => mem.readInt(u16, self.data.items[buf_start + 4 ..][0..2], native_endian),
-                else => @intCast(self.data.items[buf_start + 4]),
-            };
-
-            const str = self.data.items[buf_start + 4 + str_bytes .. buf_start + 4 + str_bytes + str_len];
-
-            if (mem.eql(u8, str, split)) {
-                try frames.append(buf_start);
-                block_end = buf_start + obj_len;
-                buf_start += 4 + str_bytes + str_len;
-                path_start += split.len + 1;
-                continue :outer;
-            }
-
-            buf_start += @intCast(obj_len);
-        }
-
-        const write_index = buf_start;
-        const write_len = count(path[split_start..]);
-
-        const buf_end = self.data.items.len;
-        assert(buf_end >= write_index);
-
-        try self.data.ensureUnusedCapacity(self.allocator, write_len);
-        self.data.items.len += write_len;
-
-        if (buf_end > write_index) {
-            const dst = self.data.items[write_index + write_len .. buf_end + write_len];
-            const src = self.data.items[write_index..buf_end];
-            mem.copyBackwards(u8, dst, src); // bench
-        }
-
-        const len = write(self.data.items[write_index..], path[split_start..]); // bench
-
-        assert(write_len == len);
-
-        for (frames.items) |frame_start| {
-            const frame_len = mem.readInt(u32, self.data.items[frame_start..][0..4], native_endian);
-            mem.writeInt(u32, self.data.items[frame_start..][0..4], frame_len + @as(u32, @intCast(len)), native_endian);
-        }
-
-        path_start = path.len;
-        frames.clearRetainingCapacity();
-    }
-    _ = hash;
+    const writer = self.data.writer(self.allocator);
+    try writer.writeInt(u16, path_len, .little); // use that one byte thingy
+    try writer.writeAll(path);
 }
 
-pub fn final(self: Self) []u8 {
-    setOffsets(self.data.items, 0);
-    return self.data.items;
-}
+pub fn final(self: *Self) Allocator.Error![]const u8 {
+    assert(!self.finalized);
+    assert(math.maxInt(u32) >= 4 + self.hashes.keys().len * (8 + 4));
+    assert(math.maxInt(u32) >= self.data.items.len);
 
-fn count(input: []const u8) u32 {
-    assert(input.len > 0);
+    const header_len: u32 = @intCast(4 + self.hashes.keys().len * (8 + 4));
+    const content_len: u32 = @intCast(self.data.items.len);
 
-    var len: u32 = 0;
-    var it = mem.splitScalar(u8, input, '/');
-    while (it.next()) |v| {
-        assert(v.len > 0);
-        assert(v.len <= math.maxInt(u16));
+    try self.data.ensureUnusedCapacity(self.allocator, header_len);
+    defer self.finalized = true;
 
-        const str_bytes: u8 = if (v.len > 254) 2 else 1;
-        len += 4 + str_bytes + @as(u32, @intCast(v.len));
-    }
-    return len;
-}
+    self.data.items.len += header_len;
+    const out = self.data.items;
 
-fn write(buf: []u8, input: []const u8) u32 {
-    assert(input.len > 0);
+    mem.copyBackwards(u8, out[header_len..], out[0..content_len]);
 
-    const split = input[0..(mem.indexOfScalar(u8, input, '/') orelse input.len)];
-    assert(split.len > 0);
-    assert(split.len <= math.maxInt(u16));
+    const Context = struct {
+        keys: []u64,
+        pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+            return ctx.keys[a_index] < ctx.keys[b_index];
+        }
+    };
 
-    //buf[4] = @intCast(split.len);
-    const str_bytes: u8 = if (split.len > 254) 2 else 1; //  todo: use zero, not 254, cuz zero sized string should not be a thing
-    switch (str_bytes) {
-        1 => buf[4] = @intCast(split.len),
-        2 => {
-            buf[4] = 255;
-            mem.writeInt(u16, buf[4..6], @intCast(split.len), native_endian);
-        },
-        else => unreachable,
+    self.hashes.sortUnstable(Context{ .keys = self.hashes.keys() });
+    mem.writeInt(u32, out[0..4], @intCast(self.hashes.keys().len), .little);
+
+    var buf_start: u32 = 4;
+    for (self.hashes.keys()) |hash| {
+        const pos = self.hashes.get(hash).?;
+        mem.writeInt(u64, out[buf_start..][0..8], hash, .little);
+        mem.writeInt(u32, out[buf_start + 8 ..][0..4], pos + header_len, .little);
+        buf_start += 8 + 4;
     }
 
-    @memcpy(buf[4 + str_bytes .. 4 + str_bytes + split.len], split);
-    var len = 4 + str_bytes + @as(u32, @intCast(split.len));
-    if (mem.indexOfScalar(u8, input, '/')) |pos| {
-        len += write(buf[len..], input[pos + 1 ..]);
-    }
-
-    mem.writeInt(u32, buf[0..4], @intCast(len), native_endian);
-    return len;
-}
-
-fn setOffsets(buf: []u8, obj_beg: u32) void {
-    _ = buf;
-    _ = obj_beg;
+    return out;
 }
