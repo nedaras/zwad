@@ -1,7 +1,3 @@
-//const c = @cImport({
-//@cInclude("xxhash.h");
-//});
-
 pub const XXH_errorcode = enum(c_int) {
     XXH_OK = 0,
     XXH_ERROR = 1,
@@ -32,11 +28,6 @@ pub const XXH128_hash_t = extern struct {
     low64: XXH64_hash_t,
     high64: XXH64_hash_t,
 };
-
-// returns null on OutOfMemory
-//pub extern fn XXH3_createState() ?*XXH3_state_t;
-
-//pub extern fn XXH3_freeState(statePtr: *XXH3_state_t) XXH_errorcode;
 
 pub extern fn XXH3_128bits_reset(statePtr: *XXH3_state_t) XXH_errorcode;
 

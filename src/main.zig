@@ -1,6 +1,7 @@
 const std = @import("std");
 const xxhash = @import("xxhash.zig");
 const windows = @import("windows.zig");
+const mapping = @import("mapping.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -180,14 +181,10 @@ pub fn main() !void {
     const hashes_file = try fs.cwd().openFile(".hashes", .{});
     defer hashes_file.close();
 
-    const hashes_len = try hashes_file.getEndPos();
-    const hashing_maping = try windows.CreateFileMappingA(hashes_file.handle, null, windows.PAGE_READONLY, 0, 0, null);
-    defer windows.CloseHandle(hashing_maping);
+    const hashes_mapping = try mapping.mapFile(hashes_file);
+    defer hashes_mapping.unmap();
 
-    const hashes_buf = try windows.MapViewOfFile(hashing_maping, windows.FILE_MAP_READ, 0, 0, 0);
-    defer windows.UnmapViewOfFile(hashes_buf);
-
-    const hashes = hashes_buf[0..hashes_len];
+    const hashes = hashes_mapping.view;
 
     comptime assert(@sizeOf(Header) == 272);
     comptime assert(@sizeOf(Entry) == 32);
