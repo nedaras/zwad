@@ -76,41 +76,6 @@ fn getPath(buf: []const u8, hash: u64) ?[]const u8 {
     return null;
 }
 
-pub fn main_() !void {
-    const file = try fs.cwd().openFile(".hashes", .{});
-    defer file.close();
-
-    const file_len = try file.getEndPos();
-    const maping = try windows.CreateFileMappingA(file.handle, null, windows.PAGE_READONLY, 0, 0, null);
-    defer windows.CloseHandle(maping);
-
-    const file_buf = try windows.MapViewOfFile(maping, 0x4, 0, 0, 0);
-    defer windows.UnmapViewOfFile(file_buf);
-
-    //var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
-    const slice = file_buf[0..file_len];
-    //const reader = file_stream.reader();
-
-    const path = getPath(slice, 0x22A5151FA6B768B);
-    if (path) |p| {
-        std.debug.print("{s}\n", .{p});
-    }
-
-    //const hashes_len = try reader.readInt(u32, .little);
-    //for (0..hashes_len) |_| {
-    //const hash = try reader.readInt(u64, .little);
-    //const offset = try reader.readInt(u32, .little);
-
-    //const path_len = mem.readInt(u16, slice[offset..][0..2], .little);
-    //const path = slice[offset + 2 .. offset + 2 + path_len];
-    //if (path_len > 255) {
-    //std.debug.print("0x{X} {s}\n", .{ hash, path[0..255] });
-    //} else {
-    //std.debug.print("0x{X} {s}\n", .{ hash, path });
-    //}
-    //}
-}
-
 pub fn main_buildhashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
@@ -219,7 +184,7 @@ pub fn main() !void {
     const hashing_maping = try windows.CreateFileMappingA(hashes_file.handle, null, windows.PAGE_READONLY, 0, 0, null);
     defer windows.CloseHandle(hashing_maping);
 
-    const hashes_buf = try windows.MapViewOfFile(hashing_maping, 0x4, 0, 0, 0);
+    const hashes_buf = try windows.MapViewOfFile(hashing_maping, windows.FILE_MAP_READ, 0, 0, 0);
     defer windows.UnmapViewOfFile(hashes_buf);
 
     const hashes = hashes_buf[0..hashes_len];
@@ -234,7 +199,7 @@ pub fn main() !void {
     const maping = try windows.CreateFileMappingA(file.handle, null, windows.PAGE_READONLY, 0, 0, null);
     defer windows.CloseHandle(maping);
 
-    const file_buf = try windows.MapViewOfFile(maping, 0x4, 0, 0, 0);
+    const file_buf = try windows.MapViewOfFile(maping, windows.FILE_MAP_READ, 0, 0, 0);
     defer windows.UnmapViewOfFile(file_buf);
 
     var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
@@ -327,7 +292,7 @@ pub fn parsing_main() !void {
     const maping = try windows.CreateFileMappingA(file.handle, null, windows.PAGE_READONLY, 0, 0, null);
     defer windows.CloseHandle(maping);
 
-    const file_buf = try windows.MapViewOfFile(maping, 0x4, 0, 0, 0);
+    const file_buf = try windows.MapViewOfFile(maping, windows.FILE_MAP_READ, 0, 0, 0);
     defer windows.UnmapViewOfFile(file_buf);
 
     var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
