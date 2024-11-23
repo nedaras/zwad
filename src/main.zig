@@ -51,7 +51,38 @@ const Entry = packed struct {
     checksum: u64,
 };
 
-pub fn main() !void {
+fn getPath(buf: []const u8, hash: u64) ?[]const u8 {
+    const hashes_len = mem.readInt(u32, buf[0..4], .little);
+    var beg: u32 = 0;
+    var end = hashes_len;
+
+    while (beg != end) {
+        const midpoint = (beg + end) / 2;
+        const pos = 4 + midpoint * (8 + 4);
+        const curr_hash = mem.readInt(u64, buf[pos..][0..8], .little);
+
+        if (curr_hash == hash) {
+            const offset = mem.readInt(u32, buf[pos + 8 ..][0..4], .little);
+
+            const path_len = mem.readInt(u16, buf[offset..][0..2], .little);
+            const path = buf[offset + 2 .. offset + 2 + path_len];
+
+            return path;
+        }
+
+        if (hash > curr_hash) {
+            beg = midpoint + 1;
+        }
+
+        if (hash < curr_hash) {
+            end = midpoint;
+        }
+    }
+
+    return null;
+}
+
+pub fn main_() !void {
     const file = try fs.cwd().openFile(".hashes", .{});
     defer file.close();
 
@@ -62,23 +93,28 @@ pub fn main() !void {
     const file_buf = MapViewOfFile(maping, 0x4, 0, 0, 0).?;
     defer _ = UnmapViewOfFile(file_buf);
 
-    var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
+    //var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
     const slice = file_buf[0..file_len];
-    const reader = file_stream.reader();
+    //const reader = file_stream.reader();
 
-    const hashes_len = try reader.readInt(u32, .little);
-    for (0..hashes_len) |_| {
-        const hash = try reader.readInt(u64, .little);
-        const offset = try reader.readInt(u32, .little);
-
-        const path_len = mem.readInt(u16, slice[offset..][0..2], .little);
-        const path = slice[offset + 2 .. offset + 2 + path_len];
-        if (path_len > 255) {
-            std.debug.print("0x{X} {s}\n", .{ hash, path[0..255] });
-        } else {
-            std.debug.print("0x{X} {s}\n", .{ hash, path });
-        }
+    const path = getPath(slice, 0x22A5151FA6B768B);
+    if (path) |p| {
+        std.debug.print("{s}\n", .{p});
     }
+
+    //const hashes_len = try reader.readInt(u32, .little);
+    //for (0..hashes_len) |_| {
+    //const hash = try reader.readInt(u64, .little);
+    //const offset = try reader.readInt(u32, .little);
+
+    //const path_len = mem.readInt(u16, slice[offset..][0..2], .little);
+    //const path = slice[offset + 2 .. offset + 2 + path_len];
+    //if (path_len > 255) {
+    //std.debug.print("0x{X} {s}\n", .{ hash, path[0..255] });
+    //} else {
+    //std.debug.print("0x{X} {s}\n", .{ hash, path });
+    //}
+    //}
 }
 
 pub fn main_buildhashes() !void {
@@ -169,7 +205,7 @@ pub fn main_buildhashes() !void {
     try out_file.writeAll(final);
 }
 
-pub fn main_validate() !void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -181,6 +217,18 @@ pub fn main_validate() !void {
     _ = args.next().?;
 
     const src = args.next() orelse return error.ArgumentSrcFileMissing; // now try to extract only a file
+
+    const hashes_file = try fs.cwd().openFile(".hashes", .{});
+    defer hashes_file.close();
+
+    const hashes_len = try hashes_file.getEndPos();
+    const hashing_maping = CreateFileMappingA(hashes_file.handle, null, win.PAGE_READONLY, 0, 0, null).?;
+    defer win.CloseHandle(hashing_maping);
+
+    const hashes_buf = MapViewOfFile(hashing_maping, 0x4, 0, 0, 0).?;
+    defer _ = UnmapViewOfFile(hashes_buf);
+
+    const hashes = hashes_buf[0..hashes_len];
 
     comptime assert(@sizeOf(Header) == 272);
     comptime assert(@sizeOf(Entry) == 32);
@@ -208,7 +256,6 @@ pub fn main_validate() !void {
     defer out_list.deinit();
 
     var prev_hash: u64 = 0;
-    std.debug.print("checksum: {x}\n", .{header.checksum});
     for (header.entries_len) |_| {
         const entry = try reader.readStruct(Entry);
         const gb = 1024 * 1024 * 1024;
@@ -220,36 +267,40 @@ pub fn main_validate() !void {
         assert(4 * gb > entry.decompressed_len);
         assert(4 * gb > entry.offset);
 
+        if (getPath(hashes, entry.hash)) |path| {
+            std.debug.print("{s}\n", .{path});
+        }
+
         switch (entry.entry_type) {
             .raw => {
-                const pos = try file_stream.getPos();
-                try file_stream.seekTo(entry.offset);
+                //const pos = try file_stream.getPos();
+                //try file_stream.seekTo(entry.offset);
 
-                assert(entry.compressed_len == entry.decompressed_len);
-                assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
+                //assert(entry.compressed_len == entry.decompressed_len);
+                //assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
 
-                const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
+                //const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
 
-                const checksum = xxhash.XxHash3(64).hash(in);
-                assert(checksum == entry.checksum);
+                //const checksum = xxhash.XxHash3(64).hash(in);
+                //assert(checksum == entry.checksum);
 
-                try file_stream.seekTo(pos);
+                //try file_stream.seekTo(pos);
             },
             .zstd, .gzip, .zstd_multi => {
-                const pos = try file_stream.getPos();
-                try file_stream.seekTo(entry.offset);
+                //const pos = try file_stream.getPos();
+                //try file_stream.seekTo(entry.offset);
 
-                assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
+                //assert(file_stream.buffer[file_stream.pos..].len >= entry.compressed_len);
 
-                const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
+                //const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
 
-                const magic = [_]u8{ 0x28, 0xB5, 0x2f, 0xfd };
-                assert(mem.eql(u8, in[0..4], &magic));
+                //const magic = [_]u8{ 0x28, 0xB5, 0x2f, 0xfd };
+                //assert(mem.eql(u8, in[0..4], &magic));
 
-                const checksum = xxhash.XxHash3(64).hash(in);
-                assert(checksum == entry.checksum);
+                //const checksum = xxhash.XxHash3(64).hash(in);
+                //assert(checksum == entry.checksum);
 
-                try file_stream.seekTo(pos);
+                //try file_stream.seekTo(pos);
             },
             .link => |t| { // hiping that gzip in zig is now slow.
                 std.debug.print("warn: idk how to handle, {s}.\n", .{@tagName(t)});
