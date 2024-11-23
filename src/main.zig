@@ -28,7 +28,7 @@ const Header = extern struct {
 };
 
 const EntryType = enum(u4) {
-    raw = 0,
+    raw,
     link,
     gzip,
     zstd,
@@ -160,7 +160,6 @@ pub fn main_buildhashes() !void {
 
     const final = try hashes.final();
 
-    // if decompression is fast, we could store it compressed .hashes file would be only 5000kb then
     std.debug.print("writting to file: {d}\n", .{final.len});
     try out_file.writeAll(final);
 }
@@ -192,17 +191,13 @@ pub fn main() !void {
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
-    const file_len = try file.getEndPos();
-    const maping = try windows.CreateFileMappingA(file.handle, null, windows.PAGE_READONLY, 0, 0, null);
-    defer windows.CloseHandle(maping);
+    const file_mapping = try mapping.mapFile(file);
+    defer file_mapping.unmap();
 
-    const file_buf = try windows.MapViewOfFile(maping, windows.FILE_MAP_READ, 0, 0, 0);
-    defer windows.UnmapViewOfFile(file_buf);
-
-    var file_stream = io.fixedBufferStream(file_buf[0..file_len]);
+    var file_stream = io.fixedBufferStream(file_mapping.view);
     const reader = file_stream.reader();
 
-    const header = try reader.readStruct(Header); // idk if league uses a specific endian, my guess is that they do not
+    const header = try reader.readStruct(Header); // todo: test if endian does matter, it should
 
     assert(mem.eql(u8, &header.version.magic, "RW"));
     assert(header.version.major == 3);

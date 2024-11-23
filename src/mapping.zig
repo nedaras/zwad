@@ -32,7 +32,7 @@ pub fn mapFile(file: File) MapFileError!MappedFile {
     const file_len = try file.getEndPos();
 
     const handle = try windows.CreateFileMappingA(file.handle, null, windows.PAGE_READONLY, 0, 0, null);
-    const view = try windows.MapViewOfFile(handle, windows.FILE_MAP_READ, 0, 0, 0);
+    const view = try windows.MapViewOfFile(handle, windows.FILE_MAP_READ, 0, 0, file_len);
 
     return .{
         .handle = handle,
