@@ -2,13 +2,13 @@ const std = @import("std");
 const xxhash = @import("xxhash.zig");
 const windows = @import("windows.zig");
 const mapping = @import("mapping.zig");
+const hashes = @import("hashes.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
-const Hashes = @import("Hashes.zig");
 
 const c = @cImport({
     @cInclude("zstd.h");
@@ -45,46 +45,6 @@ const Entry = packed struct {
     subchunk: u24,
     checksum: u64,
 };
-
-fn getPath(buf: []const u8, hash: u64) ?[]const u8 {
-    const hashes_len = mem.readInt(u32, buf[0..4], .little);
-    var beg: u32 = 0;
-    var end = hashes_len;
-
-    while (beg != end) {
-        const midpoint = (beg + end) / 2;
-        const pos = 4 + midpoint * (8 + 4);
-        const curr_hash = mem.readInt(u64, buf[pos..][0..8], .little);
-
-        if (curr_hash == hash) {
-            const offset = mem.readInt(u32, buf[pos + 8 ..][0..4], .little);
-
-            const path_bytes: u8 = switch (buf[offset]) {
-                0 => 3,
-                else => 1,
-            };
-
-            const path_len = switch (path_bytes) {
-                3 => mem.readInt(u16, buf[offset + 1 ..][0..2], .little),
-                1 => buf[offset],
-                else => unreachable,
-            };
-
-            const path = buf[offset + path_bytes .. offset + path_bytes + path_len];
-            return path;
-        }
-
-        if (hash > curr_hash) {
-            beg = midpoint + 1;
-        }
-
-        if (hash < curr_hash) {
-            end = midpoint;
-        }
-    }
-
-    return null;
-}
 
 pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
@@ -131,8 +91,8 @@ pub fn main_generate_hashes() !void {
     const out_file = try fs.cwd().createFile(".hashes", .{}); // mb maping would prob be better, cuz on falure we would not have corrupted .hashes file
     defer out_file.close();
 
-    var hashes = Hashes.init(allocator);
-    defer hashes.deinit();
+    var game_hashes = hashes.Compressor.init(allocator);
+    defer game_hashes.deinit();
 
     while (true) { // zig implemintation is rly rly slow
         if (mem.indexOfScalar(u8, buf[start..end], '\n')) |pos| {
@@ -147,7 +107,7 @@ pub fn main_generate_hashes() !void {
                 const hash = try fastHexParse(u64, line[0..16]);
                 const file = line[17..];
 
-                try hashes.update(hash, file);
+                try game_hashes.update(hash, file);
             }
             fbs.pos = 0;
 
@@ -155,10 +115,7 @@ pub fn main_generate_hashes() !void {
         }
         try writer.writeAll(buf[start..end]);
 
-        const amt = req.read(buf[0..]) catch |err| {
-            try out_file.writeAll(hashes.data.items);
-            return err;
-        };
+        const amt = try req.read(buf[0..]);
         if (amt == 0) break; //return error.EndOfStream;
 
         start = 0;
@@ -167,7 +124,7 @@ pub fn main_generate_hashes() !void {
 
     std.debug.print("finalizing\n", .{});
 
-    const final = try hashes.final();
+    const final = try game_hashes.final();
 
     std.debug.print("writting to file: {d}\n", .{final.len});
     try out_file.writeAll(final);
@@ -196,7 +153,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     const hashes_mapping = try mapping.mapFile(hashes_file);
     defer hashes_mapping.unmap();
 
-    const hashes = hashes_mapping.view;
+    const game_hashes = hashes.decompressor(hashes_mapping.view);
 
     comptime assert(@sizeOf(Header) == 272);
     comptime assert(@sizeOf(Entry) == 32);
@@ -231,7 +188,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         assert(4 * gb > entry.decompressed_len);
         assert(4 * gb > entry.offset);
 
-        if (getPath(hashes, entry.hash)) |path| switch (entry.entry_type) {
+        if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) { // bench
             .raw => {
                 const pos = file_stream.pos;
 
