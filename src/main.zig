@@ -124,7 +124,7 @@ pub fn main_generate_hashes() !void {
 
     std.debug.print("finalizing\n", .{});
 
-    const final = try game_hashes.final();
+    const final = try hashes.final();
 
     std.debug.print("writting to file: {d}\n", .{final.len});
     try out_file.writeAll(final);
@@ -188,7 +188,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         assert(4 * gb > entry.decompressed_len);
         assert(4 * gb > entry.offset);
 
-        if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) { // bench
+        if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) {
             .raw => {
                 const pos = file_stream.pos;
 
