@@ -3,16 +3,13 @@ const xxhash = @import("xxhash.zig");
 const windows = @import("windows.zig");
 const mapping = @import("mapping.zig");
 const hashes = @import("hashes.zig");
+const compress = @import("compress.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
-
-const c = @cImport({
-    @cInclude("zstd.h");
-});
 
 const Header = extern struct {
     const Version = extern struct {
@@ -228,9 +225,8 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
                 const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
                 const out = out_list.items;
 
-                const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // we could have stack buf and just fill it and write to file, and thus we would not need to alloc mem.
-                assert(c.ZSTD_isError(zstd_len) == windows.FALSE); //  just return them errors
-                //std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
+                // we're using direct, we should use wrapped function lilk bufDecompress
+                try compress.zstd.decompress(out, in);
 
                 if (fs.path.dirname(path)) |dir| {
                     try out_dir.makePath(dir);
