@@ -1,3 +1,4 @@
+// v1.15.2
 pub const ZSTDError = enum(c_int) {
     NO_ERROR = 0,
     GENERIC = 1,

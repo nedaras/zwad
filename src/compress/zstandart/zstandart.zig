@@ -22,7 +22,7 @@ pub fn getErrorCode(code: usize) ZSTDError {
 pub fn unexpectedError(err: ZSTDError) UnexpectedError {
     const code = 0 -% @as(usize, @intCast(@intFromEnum(err)));
 
-    std.debug.print("error.Unexpected: ZSTD_GetErrorCode({d}): {s}\n", .{
+    std.debug.print("error.Unexpected: ZSTD_getErrorCode({d}): {s}\n", .{
         @intFromEnum(err),
         zstd.ZSTD_getErrorName(code),
     });

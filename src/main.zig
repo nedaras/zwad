@@ -243,7 +243,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
 
                 try out_file.writeAll(out);
             },
-            .link, .gzip => |t| { // hiping that gzip in zig is now slow.
+            .link, .gzip => |t| { // hoping that gzip in zig is not too slow.
                 std.debug.print("warn: idk how to handle {s}, path: {s}.\n", .{ @tagName(t), path });
             },
         } else { // add like _unknown path
