@@ -1,0 +1,33 @@
+// v1.15.2
+pub const ZSTDError = enum(c_int) {
+    NO_ERROR = 0,
+    GENERIC = 1,
+    PREFIX_UNKNOWN = 10,
+    VERSION_UNSUPPORTED = 12,
+    FRAME_PARAMATER_UNSUPORTED = 14,
+    FRAME_PARAMATER_WINDOW_TOO_LARGE = 16,
+    CORRUPTION_DETECTED = 20,
+    CHECKSUM_WRONG = 22,
+    DICTIONARY_CORRUPTED = 30,
+    DICTIONARY_WRONG = 32,
+    DICTIONARY_CREATION_FAILED = 34,
+    PARAMATER_UNSUPORTED = 40,
+    PARAMATER_OUT_OF_BOUNDS = 42,
+    TABLE_LOG_TOO_LARGE = 44,
+    MAX_SYMBOL_VALUE_TOO_LARGE = 46,
+    MAX_SYMBOL_VALUE_TOO_SMALL = 48,
+    STAGE_WRONG = 60,
+    INIT_MISSING = 62,
+    MEMORY_ALLOCATION = 64,
+    WORK_SPACE_TOO_SMALL = 66,
+    DST_SIZE_TOO_SMALL = 70,
+    SRC_SIZE_WRONG = 72,
+    DST_BUFFER_NULL = 74,
+    // following error codes are not stable and may be removed or changed in a future version
+    FRAME_INDEX_TOO_LARGE = 100,
+    SEEKABLE_IO = 102,
+    DST_BUFFER_WRONG = 104,
+    SRC_BUFFER_WRONG = 105,
+    MAX_CODE = 120, // never EVER use this value directly, it can change in future versions! Use ZSTD_isError() instead
+    _,
+};

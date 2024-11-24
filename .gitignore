@@ -1,6 +1,2 @@
-/zig-cache/
-/zig-out/
-
-/out/
-Aatrox.wad.client
-
+.zig-cache
+zig-out
