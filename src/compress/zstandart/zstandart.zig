@@ -2,7 +2,7 @@ const std = @import("std");
 const zstd = @import("external.zig");
 const windows = std.os.windows;
 
-pub const ZSTDError = @import("ZSRDError.zig").ZSTDError;
+pub const ZSTDError = @import("ZSTDError.zig").ZSTDError;
 pub const UnexpectedError = error{Unexpected};
 
 pub const DecompressError = error{Unexpected};
