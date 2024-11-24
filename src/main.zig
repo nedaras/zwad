@@ -59,9 +59,18 @@ fn getPath(buf: []const u8, hash: u64) ?[]const u8 {
         if (curr_hash == hash) {
             const offset = mem.readInt(u32, buf[pos + 8 ..][0..4], .little);
 
-            const path_len = mem.readInt(u16, buf[offset..][0..2], .little);
-            const path = buf[offset + 2 .. offset + 2 + path_len];
+            const path_bytes: u8 = switch (buf[offset]) {
+                0 => 3,
+                else => 1,
+            };
 
+            const path_len = switch (path_bytes) {
+                3 => mem.readInt(u16, buf[offset + 1 ..][0..2], .little),
+                1 => buf[offset],
+                else => unreachable,
+            };
+
+            const path = buf[offset + path_bytes .. offset + path_bytes + path_len];
             return path;
         }
 
@@ -77,7 +86,7 @@ fn getPath(buf: []const u8, hash: u64) ?[]const u8 {
     return null;
 }
 
-pub fn main_buildhashes() !void {
+pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -263,16 +272,15 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
                 const out = out_list.items;
 
                 const zstd_len = c.ZSTD_decompress(out.ptr, out.len, in.ptr, in.len); // we could have stack buf and just fill it and write to file, and thus we would not need to alloc mem.
-                if (c.ZSTD_isError(zstd_len) == windows.TRUE) {
-                    std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
-                }
+                assert(c.ZSTD_isError(zstd_len) == windows.FALSE); //  just return them errors
+                //std.debug.print("err: {s}\n", .{c.ZSTD_getErrorName(zstd_len)});
 
                 if (fs.path.dirname(path)) |dir| {
                     try out_dir.makePath(dir);
                 }
 
                 const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
-                    error.BadPathName => {
+                    error.BadPathName => { // add like _invalid path
                         std.debug.print("warn: invalid path:  {s}.\n", .{path});
                         continue;
                     },
@@ -285,7 +293,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
             .link, .gzip => |t| { // hiping that gzip in zig is now slow.
                 std.debug.print("warn: idk how to handle {s}, path: {s}.\n", .{ @tagName(t), path });
             },
-        } else {
+        } else { // add like _unknown path
             std.debug.print("unknown file: 0x{X}\n", .{entry.hash});
         }
     }

@@ -33,17 +33,26 @@ pub fn update(self: *Self, hash: u64, path: []const u8) UpdateError!void {
     assert(!self.finalized);
     assert(path.len > 0);
 
-    if (path.len > math.maxInt(u64)) return error.NameTooLong;
-    assert(math.maxInt(u32) >= self.data.items.len + 2 + path.len); // 2 bytes for byte_len
+    if (path.len > math.maxInt(u16)) return error.NameTooLong;
+
+    const path_bytes: u8 = if (path.len > math.maxInt(u8)) 3 else 1;
+    assert(math.maxInt(u32) >= self.data.items.len + path_bytes + path.len); // todo: return error os sum
+
     if (self.hashes.get(hash) != null) return error.AlreadyExists;
 
-    const path_len: u16 = @intCast(path.len);
     const pos: u32 = @intCast(self.data.items.len);
-
     try self.hashes.put(self.allocator, hash, pos);
 
     const writer = self.data.writer(self.allocator);
-    try writer.writeInt(u16, path_len, .little); // use that one byte thingy
+    switch (path_bytes) {
+        3 => {
+            try writer.writeByte(0);
+            try writer.writeInt(u16, @intCast(path.len), .little);
+        },
+        1 => try writer.writeByte(@intCast(path.len)),
+        else => unreachable,
+    }
+
     try writer.writeAll(path);
 }
 
