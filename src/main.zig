@@ -4,6 +4,7 @@ const windows = @import("windows.zig");
 const mapping = @import("mapping.zig");
 const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
+const wad = @import("wad.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -141,7 +142,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     const src = args.next() orelse return error.ArgumentSrcFileMissing;
     const dst = args.next() orelse return error.ArgumentDstDirMissing;
 
-    var out_dir = try fs.cwd().openDir(dst, .{});
+    var out_dir = try fs.cwd().makeOpenPath(dst, .{});
     defer out_dir.close();
 
     const hashes_file = try fs.cwd().openFile(".hashes", .{});
@@ -151,9 +152,10 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     defer hashes_mapping.unmap();
 
     const game_hashes = hashes.decompressor(hashes_mapping.view);
+    _ = game_hashes;
 
-    comptime assert(@sizeOf(Header) == 272);
-    comptime assert(@sizeOf(Entry) == 32);
+    //comptime assert(@sizeOf(Header) == 272);
+    //comptime assert(@sizeOf(Entry) == 32);
 
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
@@ -162,94 +164,112 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     defer file_mapping.unmap();
 
     var file_stream = io.fixedBufferStream(file_mapping.view);
-    const reader = file_stream.reader();
+    //  const reader = file_stream.reader();
 
-    const header = try reader.readStruct(Header); // todo: test if endian does matter, it should
-
-    assert(mem.eql(u8, &header.version.magic, "RW"));
-    assert(header.version.major == 3);
-    assert(header.version.minor == 4);
+    var in_list = std.ArrayList(u8).init(allocator);
+    defer in_list.deinit();
 
     var out_list = std.ArrayList(u8).init(allocator);
     defer out_list.deinit();
 
-    var prev_hash: u64 = 0;
-    for (header.entries_len) |_| {
-        const entry = try reader.readStruct(Entry);
-        const gb = 1024 * 1024 * 1024;
+    var iter = try wad.iterator(file_stream.reader(), file_stream.seekableStream());
+    while (try iter.next()) |entry| {
+        try out_list.ensureTotalCapacity(entry.decompressed_len);
+        out_list.items.len = entry.decompressed_len;
 
-        assert(entry.hash >= prev_hash);
-        prev_hash = entry.hash;
+        try in_list.ensureTotalCapacity(entry.compressed_len);
+        in_list.items.len = entry.compressed_len;
 
-        assert(4 * gb > entry.compressed_len);
-        assert(4 * gb > entry.decompressed_len);
-        assert(4 * gb > entry.offset);
+        const out = out_list.items;
+        const in = in_list.items;
 
-        if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) {
-            .raw => {
-                const pos = file_stream.pos;
+        try entry.decompress(in, out);
 
-                file_stream.pos = @intCast(entry.offset);
-                defer file_stream.pos = pos;
-
-                assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
-
-                const out = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.decompressed_len];
-
-                if (fs.path.dirname(path)) |dir| {
-                    try out_dir.makePath(dir);
-                }
-
-                const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
-                    error.BadPathName => {
-                        std.debug.print("warn: invalid path:  {s}.\n", .{path});
-                        continue;
-                    },
-                    else => return err,
-                };
-                defer out_file.close();
-
-                try out_file.writeAll(out);
-            },
-            .zstd, .zstd_multi => {
-                const pos = file_stream.pos;
-
-                file_stream.pos = @intCast(entry.offset);
-                defer file_stream.pos = pos;
-
-                try out_list.ensureTotalCapacity(entry.decompressed_len);
-                out_list.items.len = entry.decompressed_len;
-
-                assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
-
-                const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
-                const out = out_list.items;
-
-                // we're using direct, we should use wrapped function lilk bufDecompress
-                try compress.zstd.decompress(out, in);
-
-                if (fs.path.dirname(path)) |dir| {
-                    try out_dir.makePath(dir);
-                }
-
-                const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
-                    error.BadPathName => { // add like _invalid path
-                        std.debug.print("warn: invalid path:  {s}.\n", .{path});
-                        continue;
-                    },
-                    else => return err,
-                };
-                defer out_file.close();
-
-                try out_file.writeAll(out);
-            },
-            .link, .gzip => |t| { // hoping that gzip in zig is not too slow.
-                std.debug.print("warn: idk how to handle {s}, path: {s}.\n", .{ @tagName(t), path });
-            },
-        } else { // add like _unknown path
-            std.debug.print("unknown file: 0x{X}\n", .{entry.hash});
-        }
+        std.debug.print("0x{X}\n", .{entry.hash});
     }
+
+    //const header = try reader.readStruct(Header); // todo: test if endian does matter, it should
+
+    //assert(mem.eql(u8, &header.version.magic, "RW"));
+    //assert(header.version.major == 3);
+    //assert(header.version.minor == 4);
+
+    //var prev_hash: u64 = 0;
+    //for (header.entries_len) |_| {
+    //const entry = try reader.readStruct(Entry);
+    //const gb = 1024 * 1024 * 1024;
+
+    //assert(entry.hash >= prev_hash);
+    //prev_hash = entry.hash;
+
+    //assert(4 * gb > entry.compressed_len);
+    //assert(4 * gb > entry.decompressed_len);
+    //assert(4 * gb > entry.offset);
+
+    //if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) {
+    //.raw => {
+    //const pos = file_stream.pos;
+
+    //file_stream.pos = @intCast(entry.offset);
+    //defer file_stream.pos = pos;
+
+    //assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
+
+    //const out = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.decompressed_len];
+
+    //if (fs.path.dirname(path)) |dir| {
+    //try out_dir.makePath(dir);
+    //}
+
+    //const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
+    //error.BadPathName => {
+    //std.debug.print("warn: invalid path:  {s}.\n", .{path});
+    //continue;
+    //},
+    //else => return err,
+    //};
+    //defer out_file.close();
+
+    //try out_file.writeAll(out);
+    //},
+    //.zstd, .zstd_multi => {
+    //const pos = file_stream.pos;
+
+    //file_stream.pos = @intCast(entry.offset);
+    //defer file_stream.pos = pos;
+
+    //try out_list.ensureTotalCapacity(entry.decompressed_len);
+    //out_list.items.len = entry.decompressed_len;
+
+    //assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
+
+    //const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
+    //const out = out_list.items;
+
+    //try compress.zstd.bufDecompress(out, in);
+
+    //if (fs.path.dirname(path)) |dir| {
+    //try out_dir.makePath(dir);
+    //}
+
+    //const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
+    //error.BadPathName => { // add like _invalid path
+    //std.debug.print("warn: invalid path:  {s}.\n", .{path});
+    //continue;
+    //},
+    //else => return err,
+    //};
+    //defer out_file.close();
+
+    //try out_file.writeAll(out);
+    //},
+    //.link, .gzip => |t| { // hoping that gzip in zig is not too slow.
+    //std.debug.print("warn: idk how to handle {s}, path: {s}.\n", .{ @tagName(t), path });
+    //},
+    //} else { // add like _unknown path
+    //std.debug.print("unknown file: 0x{X}\n", .{entry.hash});
+    //}
+    //}
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed

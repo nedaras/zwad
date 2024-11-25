@@ -7,8 +7,8 @@ pub const UnexpectedError = error{Unexpected};
 
 pub const DecompressError = error{Unexpected};
 
-pub fn decompress(buf: []u8, compressed: []const u8) DecompressError!void {
-    const res = zstd.ZSTD_decompress(buf.ptr, buf.len, compressed.ptr, compressed.len);
+pub fn bufDecompress(compressed: []const u8, dist: []u8) DecompressError!void {
+    const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len);
     switch (getErrorCode(res)) {
         .NO_ERROR => {},
         else => |err| return unexpectedError(err),
