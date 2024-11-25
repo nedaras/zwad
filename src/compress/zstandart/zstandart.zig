@@ -11,6 +11,12 @@ pub const zstd_out_buf = zstd.ZSTD_outBuffer;
 
 pub const DecompressError = error{Unexpected};
 
+pub const MAX_FRAME_HEADER_BYTES = 18; // magicNumber(4) + frameHeaderMax(14);
+pub const MIN_FRAME_HEADER_BYTES = 6; // magicNumber(4) + frameHeaderMin(2);
+
+pub const MAX_HEADER_BYTES = MAX_FRAME_HEADER_BYTES + 3; // magicNumber(4) + frameHeaderMax(14) + blockHeader(3);
+pub const MIN_HEADER_BYTES = MIN_FRAME_HEADER_BYTES + 3; // magicNumber(4) + frameHeaderMin(2) + blockHeader(3);
+
 pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
     const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len);
     switch (getErrorCode(res)) {
@@ -33,13 +39,18 @@ pub fn decompressStream(stream: *DecompressStream, in: *zstd_in_buf, out: *zstd_
     };
 }
 
-pub const GetFrameContentSizeError = error{Unexpected};
+pub const GetFrameContentSizeError = error{
+    SizeUnknown,
+    BufferTooSmall,
+    Unexpected,
+};
 
-fn getFrameContentSize(buf: []const u8) !usize {
+pub fn getFrameContentSize(buf: []const u8) !usize {
     const res = zstd.ZSTD_getFrameContentSize(buf.ptr, buf.len);
     return switch (getErrorCode(res)) {
         .NO_ERROR => res,
-        else => |err| unexpectedError(err),
+        .GENERIC => error.SizeUnknown,
+        else => |err| if (@intFromEnum(err) == 2) return error.BufferTooSmall else unexpectedError(err),
     };
 }
 

@@ -152,7 +152,6 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     defer hashes_mapping.unmap();
 
     const game_hashes = hashes.decompressor(hashes_mapping.view);
-    _ = game_hashes;
 
     //comptime assert(@sizeOf(Header) == 272);
     //comptime assert(@sizeOf(Entry) == 32);
@@ -184,7 +183,24 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         try out_list.ensureTotalCapacity(entry.decompressed_len);
         out_list.items.len = entry.decompressed_len;
 
-        _ = try zstd_stream.readAll(out_list.items);
+        const out = try zstd_stream.readAll(out_list.items);
+
+        const path = game_hashes.get(entry.hash).?;
+
+        if (fs.path.dirname(path)) |dir| {
+            try out_dir.makePath(dir);
+        }
+
+        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
+            error.BadPathName => { // add like _invalid path
+                std.debug.print("warn: invalid path:  {s}.\n", .{path});
+                continue;
+            },
+            else => return err,
+        };
+        defer out_file.close();
+
+        try out_file.writeAll(out);
 
         //try in_list.ensureTotalCapacity(entry.compressed_len);
         //in_list.items.len = entry.compressed_len;
