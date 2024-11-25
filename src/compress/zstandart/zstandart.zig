@@ -5,14 +5,49 @@ const windows = std.os.windows;
 pub const ZSTDError = @import("ZSTDError.zig").ZSTDError;
 pub const UnexpectedError = error{Unexpected};
 
+pub const DecompressStream = zstd.ZSTD_DStream;
+pub const zstd_in_buf = zstd.ZSTD_inBuffer;
+pub const zstd_out_buf = zstd.ZSTD_outBuffer;
+
 pub const DecompressError = error{Unexpected};
 
-pub fn bufDecompress(compressed: []const u8, dist: []u8) DecompressError!void {
+pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
     const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len);
     switch (getErrorCode(res)) {
         .NO_ERROR => {},
         else => |err| return unexpectedError(err),
     }
+}
+
+pub const DecompressStreamError = error{Unexpected};
+
+pub fn decompressStream(stream: *DecompressStream, in: *zstd_in_buf, out: *zstd_out_buf) DecompressStreamError!usize {
+    const res = zstd.ZSTD_decompressStream(stream, out, in);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => res,
+        else => |err| unexpectedError(err),
+    };
+}
+
+pub const InitDecompressStreamError = error{Unexpected};
+
+pub fn initDecompressStream() InitDecompressStreamError!*DecompressStream {
+    const decompress_steam = zstd.ZSTD_createDStream().?;
+    const res = zstd.ZSTD_initDStream(decompress_steam);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => decompress_steam,
+        else => |err| unexpectedError(err),
+    };
+}
+
+pub fn deinitDecompressStream(stream: *DecompressStream) void {
+    const res = zstd.ZSTD_freeDStream(stream);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => {},
+        else => |err| {
+            unexpectedError(err) catch unreachable;
+        },
+    };
 }
 
 pub fn getErrorCode(code: usize) ZSTDError {

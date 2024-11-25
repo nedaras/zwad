@@ -174,18 +174,27 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
 
     var iter = try wad.iterator(file_stream.reader(), file_stream.seekableStream());
     while (try iter.next()) |entry| {
+        if (entry.entry_type != .zstd) continue;
+        const compressed = file_mapping.view[entry.offset .. entry.offset + entry.compressed_len];
+        var fbs = io.fixedBufferStream(compressed);
+
+        var zstd_stream = compress.zstd.decompressor(fbs.reader());
+        defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state);
+
         try out_list.ensureTotalCapacity(entry.decompressed_len);
         out_list.items.len = entry.decompressed_len;
 
-        try in_list.ensureTotalCapacity(entry.compressed_len);
-        in_list.items.len = entry.compressed_len;
+        const len = try zstd_stream.reader().readAll(out_list.items);
 
-        const out = out_list.items;
-        const in = in_list.items;
+        //try in_list.ensureTotalCapacity(entry.compressed_len);
+        //in_list.items.len = entry.compressed_len;
 
-        try entry.decompress(in, out);
+        //const out = out_list.items;
+        //const in = in_list.items;
 
-        std.debug.print("0x{X}\n", .{entry.hash});
+        //try entry.decompress(in, out);
+
+        std.debug.print("0x{X}, len: {d}\n", .{ entry.hash, len });
     }
 
     //const header = try reader.readStruct(Header); // todo: test if endian does matter, it should
