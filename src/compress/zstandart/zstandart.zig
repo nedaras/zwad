@@ -19,10 +19,24 @@ pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
     }
 }
 
-pub const DecompressStreamError = error{Unexpected};
+pub const DecompressStreamError = error{
+    NoSpaceLeft,
+    Unexpected,
+};
 
 pub fn decompressStream(stream: *DecompressStream, in: *zstd_in_buf, out: *zstd_out_buf) DecompressStreamError!usize {
     const res = zstd.ZSTD_decompressStream(stream, out, in);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => res,
+        .DST_SIZE_TOO_SMALL => error.NoSpaceLeft,
+        else => |err| unexpectedError(err),
+    };
+}
+
+pub const GetFrameContentSizeError = error{Unexpected};
+
+fn getFrameContentSize(buf: []const u8) !usize {
+    const res = zstd.ZSTD_getFrameContentSize(buf.ptr, buf.len);
     return switch (getErrorCode(res)) {
         .NO_ERROR => res,
         else => |err| unexpectedError(err),

@@ -179,12 +179,12 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         var fbs = io.fixedBufferStream(compressed);
 
         var zstd_stream = compress.zstd.decompressor(fbs.reader());
-        defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state);
+        defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state); // i hate this and it has to be allocated the buf is too large
 
         try out_list.ensureTotalCapacity(entry.decompressed_len);
         out_list.items.len = entry.decompressed_len;
 
-        const len = try zstd_stream.reader().readAll(out_list.items);
+        _ = try zstd_stream.readAll(out_list.items);
 
         //try in_list.ensureTotalCapacity(entry.compressed_len);
         //in_list.items.len = entry.compressed_len;
@@ -194,7 +194,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
 
         //try entry.decompress(in, out);
 
-        std.debug.print("0x{X}, len: {d}\n", .{ entry.hash, len });
+        //std.debug.print("0x{X}\n", .{entry.hash});
     }
 
     //const header = try reader.readStruct(Header); // todo: test if endian does matter, it should

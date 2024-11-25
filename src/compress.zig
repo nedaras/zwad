@@ -1,6 +1,7 @@
 const std = @import("std");
-const io = std.io;
 const zstandart = @import("compress/zstandart/zstandart.zig");
+const io = std.io;
+const assert = std.debug.assert;
 
 pub const zstd = struct {
     pub fn Decompressor(comptime ReaderType: type) type {
@@ -22,22 +23,33 @@ pub const zstd = struct {
             pub const Reader = io.Reader(*Self, ReadError, read);
 
             pub fn read(self: *Self, buf: []u8) ReadError!usize {
-                var block_buf: [16 * 1024]u8 = undefined;
-                const block_buf_len = try self.source.read(&block_buf);
+                _ = self;
+                _ = buf;
+                @panic("no");
+            }
 
-                var in_buf = zstandart.zstd_in_buf{
-                    .src = &block_buf,
-                    .size = block_buf_len,
-                    .pos = 0,
-                };
-
+            // todo: add like decompressed size man or mb zstd can provide it inside header or sum, we want to read it as much as possible
+            pub fn readAll(self: *Self, buf: []u8) ![]u8 {
+                var chunk_buf: [std.crypto.tls.max_ciphertext_len]u8 = undefined; // ZSTD_BLOCKSIZELOG_MAX is 1 << 17
                 var out_buf = zstandart.zstd_out_buf{
                     .dst = buf.ptr,
                     .size = buf.len,
                     .pos = 0,
                 };
 
-                return try zstandart.decompressStream(self.state, &in_buf, &out_buf);
+                while (true) {
+                    const len = try self.source.read(&chunk_buf);
+                    var in_buf = zstandart.zstd_in_buf{
+                        .src = &chunk_buf,
+                        .size = len,
+                        .pos = 0,
+                    };
+
+                    const amt = try zstandart.decompressStream(self.state, &in_buf, &out_buf);
+                    if (amt == 0) break;
+                }
+
+                return buf[0..out_buf.pos];
             }
 
             pub fn reader(file: *Self) Reader {

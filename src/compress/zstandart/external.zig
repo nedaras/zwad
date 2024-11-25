@@ -18,6 +18,8 @@ pub const ZSTD_outBuffer = extern struct {
     pos: usize,
 };
 
+pub extern fn ZSTD_getFrameContentSize(src: [*]const u8, srcSize: usize) usize;
+
 pub extern fn ZSTD_freeDStream(zds: *ZSTD_DStream) usize;
 
 pub extern fn ZSTD_createDStream() ?*ZSTD_DStream;
