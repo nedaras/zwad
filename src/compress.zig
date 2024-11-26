@@ -7,7 +7,7 @@ pub const zstd = struct {
     pub fn Decompressor(comptime ReaderType: type) type {
         return struct {
             source: ReaderType,
-            state: *zstandart.DecompressStream, // somewhere in this struct it should be some like size thing
+            state: zstandart.DecompressStream, // somewhere in this struct it should be some like size thing
 
             const Self = @This();
 
@@ -23,6 +23,7 @@ pub const zstd = struct {
             pub const Reader = io.Reader(*Self, ReadError, read);
 
             pub fn read(self: *Self, buf: []u8) ReadError!usize {
+                // we need to like read out from source only the frame, how? idk
                 _ = self;
                 _ = buf;
                 @panic("no");
@@ -37,9 +38,6 @@ pub const zstd = struct {
                     .pos = 0,
                 };
 
-                const content_size = try readSize(self, &out_buf);
-                std.debug.print("content_size: {d}\n", .{content_size.?});
-
                 while (true) {
                     const len = try self.source.read(&chunk_buf);
                     var in_buf = zstandart.zstd_in_buf{
@@ -48,7 +46,7 @@ pub const zstd = struct {
                         .pos = 0,
                     };
 
-                    const amt = try zstandart.decompressStream(self.state, &in_buf, &out_buf);
+                    const amt = try zstandart.decompressStream(&self.state, &in_buf, &out_buf);
                     if (amt == 0) break;
                 }
 
@@ -72,7 +70,7 @@ pub const zstd = struct {
                         };
 
                         const frame_size = try zstandart.getFrameContentSize(&header);
-                        _ = try zstandart.decompressStream(self.state, &in_buf, out_buf);
+                        _ = try zstandart.decompressStream(&self.state, &in_buf, out_buf);
                         return frame_size;
                     },
                     error.SizeUnknown => null,

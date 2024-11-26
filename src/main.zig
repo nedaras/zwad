@@ -12,6 +12,10 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 
+const c = @cImport({
+    @cInclude("zstde.h");
+});
+
 const Header = extern struct {
     const Version = extern struct {
         magic: [2]u8,
@@ -129,6 +133,13 @@ pub fn main_generate_hashes() !void {
 }
 
 pub fn main() !void { // not as fast as i wanted it to be, could async io make sence here?
+    const zstandart = @import("compress/zstandart/external.zig");
+    std.debug.print("sizeof: {d}, alignof: {d}\n", .{ c.ZSTDE_sizeof(), c.ZSTDE_alignof() });
+    std.debug.print("sizeof: {d}, alignof: {d}\n", .{ @sizeOf(zstandart.ZSTD_DStream), @alignOf(zstandart.ZSTD_DStream) });
+
+    var stream = std.mem.zeroes(zstandart.ZSTD_DStream);
+    _ = zstandart.ZSTD_initDStream(&stream);
+
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -178,12 +189,13 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         var fbs = io.fixedBufferStream(compressed);
 
         var zstd_stream = compress.zstd.decompressor(fbs.reader());
-        defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state); // i hate this and it has to be allocated the buf is too large
+        //defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state); // i hate this put it on the stack or heap we need to compare performences
 
         try out_list.ensureTotalCapacity(entry.decompressed_len);
         out_list.items.len = entry.decompressed_len;
 
         const out = try zstd_stream.readAll(out_list.items);
+        assert(out.len == out_list.items.len);
 
         const path = game_hashes.get(entry.hash).?;
 

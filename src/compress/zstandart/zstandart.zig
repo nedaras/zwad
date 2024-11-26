@@ -56,9 +56,10 @@ pub fn getFrameContentSize(buf: []const u8) !usize {
 
 pub const InitDecompressStreamError = error{Unexpected};
 
-pub fn initDecompressStream() InitDecompressStreamError!*DecompressStream {
-    const decompress_steam = zstd.ZSTD_createDStream().?;
-    const res = zstd.ZSTD_initDStream(decompress_steam);
+pub fn initDecompressStream() InitDecompressStreamError!DecompressStream {
+    //const decompress_steam = zstd.ZSTD_createDStream().?;
+    var decompress_steam: DecompressStream = undefined;
+    const res = zstd.ZSTD_initDStream(&decompress_steam);
     return switch (getErrorCode(res)) {
         .NO_ERROR => decompress_steam,
         else => |err| unexpectedError(err),

@@ -1,10 +1,17 @@
 const win = @import("std").os.windows;
 const c = @cImport({
     @cInclude("zstd.h");
+    @cInclude("zstd_decompress_internal.h");
 });
 
-// we need to add it //https://github.com/facebook/zstd/blob/v1.5.2/lib/decompress/zstd_decompress_internal.h ZSTD_DCtx_s
-pub const ZSTD_DStream = opaque {}; // atleast figure out the size
+pub const ZSTD_seqSymbol = extern struct {
+    nextState: u16,
+    nbAdditionalBits: u8,
+    nbBits: u8,
+    baseValue: u32,
+};
+
+pub const ZSTD_DStream = c.ZSTD_DCtx;
 
 pub const ZSTD_inBuffer = extern struct {
     src: [*]u8,
