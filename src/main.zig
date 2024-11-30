@@ -12,42 +12,6 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 
-const c = @cImport({
-    @cInclude("zstde.h");
-});
-
-const Header = extern struct {
-    const Version = extern struct {
-        magic: [2]u8,
-        major: u8,
-        minor: u8,
-    };
-
-    version: Version,
-    ecdsa_signature: [256]u8,
-    checksum: u64 align(1),
-    entries_len: u32,
-};
-
-const EntryType = enum(u4) {
-    raw,
-    link,
-    gzip,
-    zstd,
-    zstd_multi,
-};
-
-const Entry = packed struct {
-    hash: u64,
-    offset: u32,
-    compressed_len: u32,
-    decompressed_len: u32,
-    entry_type: EntryType,
-    subchunk_len: u4,
-    subchunk: u24,
-    checksum: u64,
-};
-
 pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
@@ -133,13 +97,6 @@ pub fn main_generate_hashes() !void {
 }
 
 pub fn main() !void { // not as fast as i wanted it to be, could async io make sence here?
-    const zstandart = @import("compress/zstandart/external.zig");
-    std.debug.print("sizeof: {d}, alignof: {d}\n", .{ c.ZSTDE_sizeof(), c.ZSTDE_alignof() });
-    std.debug.print("sizeof: {d}, alignof: {d}\n", .{ @sizeOf(zstandart.ZSTD_DStream), @alignOf(zstandart.ZSTD_DStream) });
-
-    var stream = std.mem.zeroes(zstandart.ZSTD_DStream);
-    _ = zstandart.ZSTD_initDStream(&stream);
-
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -164,9 +121,6 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
 
     const game_hashes = hashes.decompressor(hashes_mapping.view);
 
-    //comptime assert(@sizeOf(Header) == 272);
-    //comptime assert(@sizeOf(Entry) == 32);
-
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
@@ -176,11 +130,11 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     var file_stream = io.fixedBufferStream(file_mapping.view);
     //  const reader = file_stream.reader();
 
-    var in_list = std.ArrayList(u8).init(allocator);
-    defer in_list.deinit();
+    var window_buf: [1 << 17]u8 = undefined;
+    var out_buf: [1 << 17]u8 = undefined;
 
-    var out_list = std.ArrayList(u8).init(allocator);
-    defer out_list.deinit();
+    var zstd_stream = try compress.zstd.Decompressor(@TypeOf(file_stream.reader())).init(allocator, undefined, .{ .window_buffer = &window_buf });
+    defer zstd_stream.deinit();
 
     var iter = try wad.iterator(file_stream.reader(), file_stream.seekableStream());
     while (try iter.next()) |entry| {
@@ -188,14 +142,9 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         const compressed = file_mapping.view[entry.offset .. entry.offset + entry.compressed_len];
         var fbs = io.fixedBufferStream(compressed);
 
-        var zstd_stream = compress.zstd.decompressor(fbs.reader());
-        //defer @import("compress/zstandart/zstandart.zig").deinitDecompressStream(zstd_stream.state); // i hate this put it on the stack or heap we need to compare performences
-
-        try out_list.ensureTotalCapacity(entry.decompressed_len);
-        out_list.items.len = entry.decompressed_len;
-
-        const out = try zstd_stream.readAll(out_list.items);
-        assert(out.len == out_list.items.len);
+        //var zstd_stream = try compress.zstd.decompressor(allocator, fbs.reader(), .{ .window_buffer = &window_buf });
+        //defer zstd_stream.deinit();
+        zstd_stream.setReader(fbs.reader());
 
         const path = game_hashes.get(entry.hash).?;
 
@@ -212,101 +161,19 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         };
         defer out_file.close();
 
-        try out_file.writeAll(out);
+        var len: usize = 0;
+        while (true) {
+            const chunk_len = try zstd_stream.read(&out_buf);
+            len += chunk_len;
+            if (chunk_len == 0) break;
+            try out_file.writeAll(out_buf[0..chunk_len]);
+        }
 
-        //try in_list.ensureTotalCapacity(entry.compressed_len);
-        //in_list.items.len = entry.compressed_len;
-
-        //const out = out_list.items;
-        //const in = in_list.items;
-
-        //try entry.decompress(in, out);
-
-        //std.debug.print("0x{X}\n", .{entry.hash});
+        if (len != entry.decompressed_len) {
+            std.debug.print("invalid_len: {d}\n", .{len});
+            unreachable;
+        }
     }
-
-    //const header = try reader.readStruct(Header); // todo: test if endian does matter, it should
-
-    //assert(mem.eql(u8, &header.version.magic, "RW"));
-    //assert(header.version.major == 3);
-    //assert(header.version.minor == 4);
-
-    //var prev_hash: u64 = 0;
-    //for (header.entries_len) |_| {
-    //const entry = try reader.readStruct(Entry);
-    //const gb = 1024 * 1024 * 1024;
-
-    //assert(entry.hash >= prev_hash);
-    //prev_hash = entry.hash;
-
-    //assert(4 * gb > entry.compressed_len);
-    //assert(4 * gb > entry.decompressed_len);
-    //assert(4 * gb > entry.offset);
-
-    //if (game_hashes.get(entry.hash)) |path| switch (entry.entry_type) {
-    //.raw => {
-    //const pos = file_stream.pos;
-
-    //file_stream.pos = @intCast(entry.offset);
-    //defer file_stream.pos = pos;
-
-    //assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
-
-    //const out = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.decompressed_len];
-
-    //if (fs.path.dirname(path)) |dir| {
-    //try out_dir.makePath(dir);
-    //}
-
-    //const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
-    //error.BadPathName => {
-    //std.debug.print("warn: invalid path:  {s}.\n", .{path});
-    //continue;
-    //},
-    //else => return err,
-    //};
-    //defer out_file.close();
-
-    //try out_file.writeAll(out);
-    //},
-    //.zstd, .zstd_multi => {
-    //const pos = file_stream.pos;
-
-    //file_stream.pos = @intCast(entry.offset);
-    //defer file_stream.pos = pos;
-
-    //try out_list.ensureTotalCapacity(entry.decompressed_len);
-    //out_list.items.len = entry.decompressed_len;
-
-    //assert(file_mapping.view.len - file_stream.pos >= entry.compressed_len); // add these of checks to hashes file
-
-    //const in = file_stream.buffer[file_stream.pos .. file_stream.pos + entry.compressed_len];
-    //const out = out_list.items;
-
-    //try compress.zstd.bufDecompress(out, in);
-
-    //if (fs.path.dirname(path)) |dir| {
-    //try out_dir.makePath(dir);
-    //}
-
-    //const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
-    //error.BadPathName => { // add like _invalid path
-    //std.debug.print("warn: invalid path:  {s}.\n", .{path});
-    //continue;
-    //},
-    //else => return err,
-    //};
-    //defer out_file.close();
-
-    //try out_file.writeAll(out);
-    //},
-    //.link, .gzip => |t| { // hoping that gzip in zig is not too slow.
-    //std.debug.print("warn: idk how to handle {s}, path: {s}.\n", .{ @tagName(t), path });
-    //},
-    //} else { // add like _unknown path
-    //std.debug.print("unknown file: 0x{X}\n", .{entry.hash});
-    //}
-    //}
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed

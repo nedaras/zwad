@@ -11,7 +11,8 @@ pub const ZSTD_seqSymbol = extern struct {
     baseValue: u32,
 };
 
-pub const ZSTD_DStream = c.ZSTD_DCtx;
+pub const ZSTD_DStream = c.ZSTD_DCtx; // not wanna recreate that has defined stuff inside is defined based on systems
+pub const sz = c.ZSTD_CONTENTSIZE_UNKNOWN;
 
 pub const ZSTD_inBuffer = extern struct {
     src: [*]u8,
@@ -25,13 +26,23 @@ pub const ZSTD_outBuffer = extern struct {
     pos: usize,
 };
 
-pub extern fn ZSTD_getFrameContentSize(src: [*]const u8, srcSize: usize) usize;
+pub const ZSTD_customMem = extern struct {
+    customAlloc: *const fn (*anyopaque, usize) callconv(.C) ?*anyopaque,
+    customFree: *const fn (*anyopaque, ?*anyopaque) callconv(.C) void,
+    @"opaque": *anyopaque,
+};
 
-pub extern fn ZSTD_freeDStream(zds: *ZSTD_DStream) usize;
+pub extern fn ZSTD_resetDStream(zds: *ZSTD_DStream) callconv(.C) usize;
 
-pub extern fn ZSTD_createDStream() ?*ZSTD_DStream;
+pub extern fn ZSTD_createDStream() callconv(.C) ?*ZSTD_DStream;
 
-pub extern fn ZSTD_initDStream(zds: *ZSTD_DStream) usize;
+pub extern fn ZSTD_createDStream_advanced(customMem: ZSTD_customMem) callconv(.C) ?*ZSTD_DStream;
+
+pub extern fn ZSTD_freeDStream(zds: *ZSTD_DStream) callconv(.C) usize;
+
+pub extern fn ZSTD_getFrameContentSize(src: [*]const u8, srcSize: usize) callconv(.C) usize;
+
+pub extern fn ZSTD_initDStream(zds: *ZSTD_DStream) callconv(.C) usize;
 
 pub extern fn ZSTD_decompress(dst: [*]u8, dstCapacity: usize, src: [*]const u8, compressedSize: usize) callconv(.C) usize;
 

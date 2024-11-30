@@ -1,99 +1,138 @@
 const std = @import("std");
 const zstandart = @import("compress/zstandart/zstandart.zig");
 const io = std.io;
+const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 pub const zstd = struct {
+    pub const DecompressorOptions = struct {
+        window_buffer: []u8,
+    };
+
     pub fn Decompressor(comptime ReaderType: type) type {
         return struct {
             source: ReaderType,
-            state: zstandart.DecompressStream, // somewhere in this struct it should be some like size thing
+            handle: *zstandart.DecompressStream,
+            buffer: WindowBuffer,
+            completed: bool = false,
+
+            const WindowBuffer = struct {
+                data: []u8,
+                unread_index: usize = 0,
+                unread_len: usize = 0,
+            };
 
             const Self = @This();
 
-            pub fn init(a: ReaderType) Self {
+            pub fn init(allocator: Allocator, rt: ReaderType, options: DecompressorOptions) !Self {
                 return .{
-                    .source = a,
-                    .state = zstandart.initDecompressStream() catch unreachable, // need to free
+                    .source = rt,
+                    .handle = try zstandart.initDecompressStream(allocator),
+                    .buffer = .{
+                        .data = options.window_buffer,
+                    },
                 };
             }
 
-            pub const ReadError = ReaderType.Error || zstandart.DecompressStreamError;
+            pub fn deinit(self: *Self) void {
+                zstandart.deinitDecompressStream(self.handle);
+                self.* = undefined;
+            }
+
+            pub const ReadError = ReaderType.Error || error{ // add MalformedFrame
+                MalformedBlock,
+                Unexpected,
+            };
 
             pub const Reader = io.Reader(*Self, ReadError, read);
 
-            pub fn read(self: *Self, buf: []u8) ReadError!usize {
-                // we need to like read out from source only the frame, how? idk
-                _ = self;
-                _ = buf;
-                @panic("no");
-            }
+            pub fn read(self: *Self, buffer: []u8) ReadError!usize {
+                if (buffer.len == 0) return 0;
+                if (self.completed) {
+                    self.completed = false;
+                    return 0;
+                }
 
-            // todo: add like decompressed size man or mb zstd can provide it inside header or sum, we want to read it as least as possible
-            pub fn readAll(self: *Self, buf: []u8) ![]u8 {
-                var chunk_buf: [std.crypto.tls.max_ciphertext_len]u8 = undefined; // ZSTD_BLOCKSIZELOG_MAX is 1 << 17
-                var out_buf = zstandart.zstd_out_buf{
-                    .dst = buf.ptr,
-                    .size = buf.len,
+                var out_buf = zstandart.OutBuffer{
+                    .dst = buffer.ptr,
+                    .size = buffer.len,
                     .pos = 0,
                 };
 
-                while (true) {
-                    const len = try self.source.read(&chunk_buf);
-                    var in_buf = zstandart.zstd_in_buf{
-                        .src = &chunk_buf,
-                        .size = len,
+                if (self.unreadBytes() > 0) {
+                    const unhanled = self.buffer.data[self.buffer.unread_index .. self.buffer.unread_index + self.buffer.unread_len];
+
+                    var in_buf = zstandart.InBuffer{
+                        .src = unhanled.ptr,
+                        .size = unhanled.len,
                         .pos = 0,
                     };
 
-                    const amt = try zstandart.decompressStream(&self.state, &in_buf, &out_buf);
-                    if (amt == 0) break;
+                    defer {
+                        self.buffer.unread_index += in_buf.pos;
+                        self.buffer.unread_len -= in_buf.pos;
+                    }
+
+                    const amt = zstandart.decompressStream(self.handle, &in_buf, &out_buf) catch |err| switch (err) {
+                        error.NoSpaceLeft => unreachable,
+                        else => |e| return e,
+                    };
+                    if (amt == 0) self.completed = true;
+
+                    return out_buf.pos;
                 }
 
-                return buf[0..out_buf.pos];
+                while (out_buf.pos == 0) {
+                    const data_len = try self.source.readAll(self.buffer.data);
+                    assert(data_len > 0);
+                    var in_buf = zstandart.InBuffer{
+                        .src = self.buffer.data.ptr,
+                        .size = data_len,
+                        .pos = 0,
+                    };
+
+                    defer {
+                        self.buffer.unread_index = in_buf.pos;
+                        self.buffer.unread_len = data_len - in_buf.pos;
+                    }
+
+                    const amt = zstandart.decompressStream(self.handle, &in_buf, &out_buf) catch |err| switch (err) {
+                        error.NoSpaceLeft => unreachable,
+                        else => |e| return e,
+                    };
+
+                    if (amt == 0) {
+                        self.completed = true;
+                        break;
+                    }
+
+                    if (out_buf.pos == 0) {
+                        assert(data_len == in_buf.pos);
+                    }
+                }
+
+                return out_buf.pos;
             }
 
-            fn readSize(self: *Self, out_buf: *zstandart.zstd_out_buf) !?usize {
-                var header: [zstandart.MAX_FRAME_HEADER_BYTES]u8 = undefined;
-                var len = try self.source.readAll(header[0..zstandart.MIN_FRAME_HEADER_BYTES]);
-                if (len != zstandart.MIN_FRAME_HEADER_BYTES) return error.EndOfStream;
-
-                const frame_size = zstandart.getFrameContentSize(header[0..len]) catch |err| switch (err) {
-                    error.BufferTooSmall => {
-                        len += try self.source.readAll(header[len..]);
-                        if (len != header.len) return error.EndOfStream;
-
-                        var in_buf = zstandart.zstd_in_buf{
-                            .src = &header,
-                            .size = len,
-                            .pos = 0,
-                        };
-
-                        const frame_size = try zstandart.getFrameContentSize(&header);
-                        _ = try zstandart.decompressStream(&self.state, &in_buf, out_buf);
-                        return frame_size;
-                    },
-                    error.SizeUnknown => null,
-                    else => return err,
-                };
-
-                var in_buf = zstandart.zstd_in_buf{
-                    .src = &header,
-                    .size = len,
-                    .pos = 0,
-                };
-
-                _ = try zstandart.decompressStream(self.state, &in_buf, out_buf);
-                return frame_size;
+            pub fn reader(self: *Self) Reader {
+                return .{ .context = self };
             }
 
-            pub fn reader(file: *Self) Reader {
-                return .{ .context = file };
+            /// Skips the unreadBytes and updates the reader.
+            pub fn setReader(self: *Self, rd: ReaderType) void {
+                self.buffer.unread_index = 0;
+                self.buffer.unread_len = 0;
+                self.source = rd;
+                self.completed = false;
+            }
+
+            pub fn unreadBytes(self: Self) usize {
+                return self.buffer.unread_len;
             }
         };
     }
 
-    pub fn decompressor(reader: anytype) Decompressor(@TypeOf(reader)) {
-        return Decompressor(@TypeOf(reader)).init(reader);
+    pub fn decompressor(allocator: Allocator, reader: anytype, options: DecompressorOptions) !Decompressor(@TypeOf(reader)) {
+        return try Decompressor(@TypeOf(reader)).init(allocator, reader, options);
     }
 };
