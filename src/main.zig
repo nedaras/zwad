@@ -137,34 +137,34 @@ pub fn main() !void {
     defer iter.deinit();
 
     var total_path_timer: u64 = 0;
-    var avg_path_timer: u64 = 0;
-
+    var total_path_creation_timer: u64 = 0;
     var total_decompression_timer: u64 = 0;
-    var avg_decompression_timer: u64 = 0;
-
     var total_write_timer: u64 = 0;
-    var avg_write_timer: u64 = 0;
 
     // We need to optimize this solution is single thread enviroment first, then we can add multi threading and async io (idk how async io would work here, prob would be even slower)
+    // check if on releaseFast zig has runtime safety idk why we're slow
+    var timer = try std.time.Timer.start();
     while (try iter.next()) |entry| {
         var path_timer = try std.time.Timer.start();
         const path = game_hashes.get(entry.hash).?;
         const path_time = path_timer.read();
 
         total_path_timer += path_time;
-        avg_path_timer += path_time / iter.entries_len;
 
+        var path_creation = try time.Timer.start();
+        // this part is the slowerst
         if (fs.path.dirname(path)) |dir| {
             try out_dir.makePath(dir);
         }
 
-        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) { // bench
+        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
             error.BadPathName => { // add like _invalid path
                 std.debug.print("warn: invalid path:  {s}.\n", .{path});
                 continue;
             },
             else => return err,
         };
+        total_path_creation_timer += path_creation.read();
         defer out_file.close();
 
         //std.debug.print("writting: {s}\n", .{path});
@@ -179,7 +179,6 @@ pub fn main() !void {
                     const decompression_time = decompression_timer.read();
 
                     total_decompression_timer += decompression_time;
-                    avg_decompression_timer += decompression_time / iter.entries_len;
 
                     len += amt;
 
@@ -188,7 +187,6 @@ pub fn main() !void {
                     const write_time = write_timer.read();
 
                     total_write_timer += write_time;
-                    avg_write_timer += write_time / iter.entries_len;
                 }
 
                 assert(len == entry.decompressed_len);
@@ -201,7 +199,6 @@ pub fn main() !void {
                     const decompression_time = decompression_timer.read();
 
                     total_decompression_timer += decompression_time;
-                    avg_decompression_timer += decompression_time / iter.entries_len;
 
                     len += chunk_len;
 
@@ -210,21 +207,21 @@ pub fn main() !void {
                     const write_time = write_timer.read();
 
                     total_write_timer += write_time;
-                    avg_write_timer += write_time / iter.entries_len;
                 }
                 assert(len == entry.decompressed_len);
             },
         }
     }
+    std.debug.print("extracting took: {d}ms\n", .{timer.read() / time.ns_per_ms});
 
     // all done on Aatrox.wad.client
-
-    // damm this is fast ~20ms
-    std.debug.print("total time spent getting paths: {d}ms, avg: {d}ms\n", .{ total_path_timer / time.ns_per_ms, avg_path_timer / time.ns_per_ms });
-    // avg is ~2ms  and it is not bad, but this is the most time spent so it would be nice to have it near zero atleast 1ms
-    std.debug.print("total time spent decompressing: {d}ms, avg: {d}ms\n", .{ total_decompression_timer / time.ns_per_ms, avg_decompression_timer / time.ns_per_ms });
-    // 551ms rly no bad, but mmap prob could make it even less
-    std.debug.print("total time spent writing to file: {d}ms, avg: {d}ms\n", .{ total_write_timer / time.ns_per_ms, avg_write_timer / time.ns_per_ms });
+    // these benches makes no sence it should extract at worse in 3seconds, but it extracts at 10seconds
+    std.debug.print("total time spent reading entries: {d}ms, avg: {d}us\n", .{ iter.total_read_timer / time.ns_per_ms, iter.total_read_timer / iter.entries_len / time.ns_per_us });
+    std.debug.print("total time spent seeking: {d}ms, avg: {d}us\n", .{ iter.total_seek_timer / time.ns_per_ms, iter.total_seek_timer / iter.entries_len / time.ns_per_us });
+    std.debug.print("total time spent getting paths: {d}ms, avg: {d}us\n", .{ total_path_timer / time.ns_per_ms, total_path_timer / iter.entries_len / time.ns_per_us });
+    std.debug.print("total time spent decompressing: {d}ms, avg: {d}us\n", .{ total_decompression_timer / time.ns_per_ms, total_decompression_timer / iter.entries_len / time.ns_per_us });
+    std.debug.print("total time spent creating paths: {d}ms, avg: {d}us\n", .{ total_path_creation_timer / time.ns_per_ms, total_path_creation_timer / iter.entries_len / time.ns_per_us });
+    std.debug.print("total time spent writing to file: {d}ms, avg: {d}us\n", .{ total_write_timer / time.ns_per_ms, total_write_timer / iter.entries_len / time.ns_per_us });
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
