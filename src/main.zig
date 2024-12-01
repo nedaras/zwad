@@ -128,24 +128,14 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     defer file_mapping.unmap();
 
     var file_stream = io.fixedBufferStream(file_mapping.view);
-    //  const reader = file_stream.reader();
 
     var window_buf: [1 << 17]u8 = undefined;
     var out_buf: [1 << 17]u8 = undefined;
 
-    var zstd_stream = try compress.zstd.Decompressor(@TypeOf(file_stream.reader())).init(allocator, undefined, .{ .window_buffer = &window_buf });
-    defer zstd_stream.deinit();
+    var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
+    defer iter.deinit();
 
-    var iter = try wad.iterator(file_stream.reader(), file_stream.seekableStream());
     while (try iter.next()) |entry| {
-        if (entry.entry_type != .zstd) continue;
-        const compressed = file_mapping.view[entry.offset .. entry.offset + entry.compressed_len];
-        var fbs = io.fixedBufferStream(compressed);
-
-        //var zstd_stream = try compress.zstd.decompressor(allocator, fbs.reader(), .{ .window_buffer = &window_buf });
-        //defer zstd_stream.deinit();
-        zstd_stream.setReader(fbs.reader());
-
         const path = game_hashes.get(entry.hash).?;
 
         if (fs.path.dirname(path)) |dir| {
@@ -155,22 +145,25 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
             error.BadPathName => { // add like _invalid path
                 std.debug.print("warn: invalid path:  {s}.\n", .{path});
-                continue;
+                return;
             },
             else => return err,
         };
         defer out_file.close();
 
+        std.debug.print("writting: {s}\n", .{path});
+
+        // we should bench like creating mmap for a whole file, cuz we know out size
         var len: usize = 0;
-        while (true) {
-            const chunk_len = try zstd_stream.read(&out_buf);
+        while (entry.decompressed_len > len) {
+            const chunk_len = try entry.decompressor.zstd.read(&out_buf);
             len += chunk_len;
-            if (chunk_len == 0) break;
+            if (chunk_len == 0) continue;
             try out_file.writeAll(out_buf[0..chunk_len]);
         }
 
         if (len != entry.decompressed_len) {
-            std.debug.print("invalid_len: {d}\n", .{len});
+            std.debug.print("invalid_len: {d}, expected: {d}\n", .{ len, entry.decompressed_len });
             unreachable;
         }
     }

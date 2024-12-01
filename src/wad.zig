@@ -1,6 +1,7 @@
 const std = @import("std");
 const compress = @import("compress.zig");
 const mem = std.mem;
+const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
 const HeaderV3_4 = extern struct {
@@ -37,45 +38,37 @@ const EntryV3_4 = packed struct {
 
 pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) type {
     return struct {
+        allocator: Allocator,
+
         reader: ReaderType,
         seekable_stream: SeekableStreamType,
 
         entries_len: u32,
         index: u32 = 0,
 
+        zstd: compress.zstd.Decompressor(ReaderType),
+
         pub const Entry = struct {
             hash: u64,
-            offset: u32,
             compressed_len: u32,
             decompressed_len: u32,
-            entry_type: EntryType,
 
-            parent_reader: ReaderType,
-            parent_seekable_stream: SeekableStreamType,
-
-            // woud be nice to make c zstd to have a reader
-            pub fn decompress(self: Entry, buf: []u8, out: []u8) !void {
-                if (self.entry_type != .zstd) return;
-
-                assert(buf.len == self.compressed_len);
-                assert(out.len == self.decompressed_len);
-
-                const pos = try self.parent_seekable_stream.getPos();
-
-                try self.parent_seekable_stream.seekTo(self.offset);
-                try self.parent_reader.readNoEof(buf);
-                try self.parent_seekable_stream.seekTo(pos);
-
-                try compress.zstd.bufDecompress(buf, out);
-            }
+            decompressor: union(enum) {
+                zstd: *compress.zstd.Decompressor(ReaderType),
+            },
         };
 
         const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            self.zstd.deinit();
+        }
 
         pub fn next(self: *Self) !?Entry {
             if (self.entries_len > self.index) {
                 defer self.index += 1;
 
+                try self.seekable_stream.seekTo(@sizeOf(HeaderV3_4) + @sizeOf(EntryV3_4) * self.index);
                 const entry: EntryV3_4 = try self.reader.readStruct(EntryV3_4); // add little endian
                 const gb = 1024 * 1024 * 1024;
 
@@ -83,14 +76,20 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
                 assert(4 * gb > entry.decompressed_len);
                 assert(4 * gb > entry.offset);
 
+                try self.seekable_stream.seekTo(entry.offset);
+
+                if (entry.entry_type == .zstd or entry.entry_type == .zstd_multi) {
+                    self.zstd.reset();
+                }
+
                 return .{
                     .hash = entry.hash,
-                    .offset = entry.offset,
                     .compressed_len = entry.compressed_len,
                     .decompressed_len = entry.decompressed_len,
-                    .entry_type = entry.entry_type,
-                    .parent_reader = self.reader,
-                    .parent_seekable_stream = self.seekable_stream,
+                    .decompressor = switch (entry.entry_type) {
+                        .zstd, .zstd_multi => .{ .zstd = &self.zstd },
+                        else => unreachable,
+                    },
                 };
             }
             return null;
@@ -98,7 +97,7 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
     };
 }
 
-pub fn iterator(reader: anytype, seekable_steam: anytype) !Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
+pub fn iterator(allocator: Allocator, reader: anytype, seekable_steam: anytype, window_buffer: []u8) !Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
     const header: HeaderV3_4 = try reader.readStruct(HeaderV3_4); // add little endian
 
     assert(mem.eql(u8, &header.version.magic, "RW")); // ret error
@@ -106,8 +105,10 @@ pub fn iterator(reader: anytype, seekable_steam: anytype) !Iterator(@TypeOf(read
     assert(header.version.minor == 4); // add multi version stuff
 
     return .{
+        .allocator = allocator,
         .reader = reader,
         .seekable_stream = seekable_steam,
         .entries_len = header.entries_len,
+        .zstd = try compress.zstd.decompressor(allocator, reader, .{ .window_buffer = window_buffer }),
     };
 }

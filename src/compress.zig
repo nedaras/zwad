@@ -118,11 +118,15 @@ pub const zstd = struct {
                 return .{ .context = self };
             }
 
-            /// Skips the unreadBytes and updates the reader.
+            /// Resets state and updates a reader.
             pub fn setReader(self: *Self, rd: ReaderType) void {
+                self.source = rd;
+                reset(self);
+            }
+
+            pub fn reset(self: *Self) void {
                 self.buffer.unread_index = 0;
                 self.buffer.unread_len = 0;
-                self.source = rd;
                 self.completed = false;
             }
 
