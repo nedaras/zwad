@@ -11,6 +11,7 @@ const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
+const time = std.time;
 
 pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
@@ -96,11 +97,11 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
-pub fn main() !void { // not as fast as i wanted it to be, could async io make sence here?
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
-    const allocator = std.heap.c_allocator; // todo: use  c_allocator on unsafe release modes
+    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -135,14 +136,29 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
     defer iter.deinit();
 
+    var total_path_timer: u64 = 0;
+    var avg_path_timer: u64 = 0;
+
+    var total_decompression_timer: u64 = 0;
+    var avg_decompression_timer: u64 = 0;
+
+    var total_write_timer: u64 = 0;
+    var avg_write_timer: u64 = 0;
+
+    // We need to optimize this solution is single thread enviroment first, then we can add multi threading and async io (idk how async io would work here, prob would be even slower)
     while (try iter.next()) |entry| {
+        var path_timer = try std.time.Timer.start();
         const path = game_hashes.get(entry.hash).?;
+        const path_time = path_timer.read();
+
+        total_path_timer += path_time;
+        avg_path_timer += path_time / iter.entries_len;
 
         if (fs.path.dirname(path)) |dir| {
             try out_dir.makePath(dir);
         }
 
-        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
+        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) { // bench
             error.BadPathName => { // add like _invalid path
                 std.debug.print("warn: invalid path:  {s}.\n", .{path});
                 continue;
@@ -158,9 +174,21 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
             .none => |stream| {
                 var len: usize = 0;
                 while (entry.decompressed_len > len) {
+                    var decompression_timer = try std.time.Timer.start();
                     const amt = try stream.readAll(out_buf[0..@min(out_buf.len, entry.decompressed_len - len)]);
+                    const decompression_time = decompression_timer.read();
+
+                    total_decompression_timer += decompression_time;
+                    avg_decompression_timer += decompression_time / iter.entries_len;
+
                     len += amt;
+
+                    var write_timer = try std.time.Timer.start();
                     try out_file.writeAll(out_buf[0..amt]);
+                    const write_time = write_timer.read();
+
+                    total_write_timer += write_time;
+                    avg_write_timer += write_time / iter.entries_len;
                 }
 
                 assert(len == entry.decompressed_len);
@@ -168,14 +196,35 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
             .zstd => |zstd_stream| {
                 var len: usize = 0;
                 while (entry.decompressed_len > len) { // cuz if we hit zstd_multi we will have multiple blocks
+                    var decompression_timer = try std.time.Timer.start();
                     const chunk_len = try zstd_stream.read(&out_buf);
+                    const decompression_time = decompression_timer.read();
+
+                    total_decompression_timer += decompression_time;
+                    avg_decompression_timer += decompression_time / iter.entries_len;
+
                     len += chunk_len;
+
+                    var write_timer = try std.time.Timer.start();
                     try out_file.writeAll(out_buf[0..chunk_len]);
+                    const write_time = write_timer.read();
+
+                    total_write_timer += write_time;
+                    avg_write_timer += write_time / iter.entries_len;
                 }
                 assert(len == entry.decompressed_len);
             },
         }
     }
+
+    // all done on Aatrox.wad.client
+
+    // damm this is fast ~20ms
+    std.debug.print("total time spent getting paths: {d}ms, avg: {d}ms\n", .{ total_path_timer / time.ns_per_ms, avg_path_timer / time.ns_per_ms });
+    // avg is ~2ms  and it is not bad, but this is the most time spent so it would be nice to have it near zero atleast 1ms
+    std.debug.print("total time spent decompressing: {d}ms, avg: {d}ms\n", .{ total_decompression_timer / time.ns_per_ms, avg_decompression_timer / time.ns_per_ms });
+    // 551ms rly no bad, but mmap prob could make it even less
+    std.debug.print("total time spent writing to file: {d}ms, avg: {d}ms\n", .{ total_write_timer / time.ns_per_ms, avg_write_timer / time.ns_per_ms });
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
