@@ -100,7 +100,7 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
-    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
+    const allocator = std.heap.c_allocator; // todo: use  c_allocator on unsafe release modes
 
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -145,26 +145,35 @@ pub fn main() !void { // not as fast as i wanted it to be, could async io make s
         const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
             error.BadPathName => { // add like _invalid path
                 std.debug.print("warn: invalid path:  {s}.\n", .{path});
-                return;
+                continue;
             },
             else => return err,
         };
         defer out_file.close();
 
-        std.debug.print("writting: {s}\n", .{path});
+        //std.debug.print("writting: {s}\n", .{path});
 
         // we should bench like creating mmap for a whole file, cuz we know out size
-        var len: usize = 0;
-        while (entry.decompressed_len > len) {
-            const chunk_len = try entry.decompressor.zstd.read(&out_buf);
-            len += chunk_len;
-            if (chunk_len == 0) continue;
-            try out_file.writeAll(out_buf[0..chunk_len]);
-        }
+        switch (entry.decompressor) {
+            .none => |stream| {
+                var len: usize = 0;
+                while (entry.decompressed_len > len) {
+                    const amt = try stream.readAll(out_buf[0..@min(out_buf.len, entry.decompressed_len - len)]);
+                    len += amt;
+                    try out_file.writeAll(out_buf[0..amt]);
+                }
 
-        if (len != entry.decompressed_len) {
-            std.debug.print("invalid_len: {d}, expected: {d}\n", .{ len, entry.decompressed_len });
-            unreachable;
+                assert(len == entry.decompressed_len);
+            },
+            .zstd => |zstd_stream| {
+                var len: usize = 0;
+                while (entry.decompressed_len > len) { // cuz if we hit zstd_multi we will have multiple blocks
+                    const chunk_len = try zstd_stream.read(&out_buf);
+                    len += chunk_len;
+                    try out_file.writeAll(out_buf[0..chunk_len]);
+                }
+                assert(len == entry.decompressed_len);
+            },
         }
     }
 }

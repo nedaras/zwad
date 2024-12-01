@@ -54,7 +54,8 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
             decompressed_len: u32,
 
             decompressor: union(enum) {
-                zstd: *compress.zstd.Decompressor(ReaderType),
+                none: ReaderType,
+                zstd: compress.zstd.Decompressor(ReaderType).Reader,
             },
         };
 
@@ -87,8 +88,10 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
                     .compressed_len = entry.compressed_len,
                     .decompressed_len = entry.decompressed_len,
                     .decompressor = switch (entry.entry_type) {
-                        .zstd, .zstd_multi => .{ .zstd = &self.zstd },
-                        else => unreachable,
+                        .raw => .{ .none = self.reader },
+                        .link => @panic("link"),
+                        .gzip => @panic("gzip"),
+                        .zstd, .zstd_multi => .{ .zstd = self.zstd.reader() },
                     },
                 };
             }
