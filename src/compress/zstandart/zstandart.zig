@@ -93,6 +93,10 @@ pub const InitDecompressStreamError = error{
 
 var stored_allocator: Allocator = undefined;
 pub fn initDecompressStream(allocator: Allocator) InitDecompressStreamError!*DecompressStream {
+    if (allocator.vtable == std.heap.c_allocator.vtable) {
+        return zstd.ZSTD_createDStream() orelse return error.OutOfMemory;
+    }
+
     stored_allocator = allocator;
     return zstd.ZSTD_createDStream_advanced(.{
         .customAlloc = &alloc,
