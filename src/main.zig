@@ -97,6 +97,25 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
+pub fn mkFile(sub_path: []const u8) !fs.File {
+    const sub_path_w = try windows.sliceToPrefixedFileW(fs.cwd().fd, sub_path);
+    //std.debug.print("{u}\n", .{sub_path_w.span()});
+    //if (fs.path.dirname(sub_path_w)) |sub_dir| {
+    //_ = sub_dir;
+    // stat
+    //}
+
+    //var sub_path_buf: [windows.MAX_PA]u16
+
+    return .{
+        .handle = try windows.OpenFile(sub_path_w.span(), .{
+            .dir = fs.cwd().fd,
+            .access_mask = windows.SYNCHRONIZE | windows.GENERIC_WRITE,
+            .creation = windows.FILE_OPEN,
+        }),
+    };
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
@@ -117,7 +136,7 @@ pub fn main() !void {
     const hashes_file = try fs.cwd().openFile(".hashes", .{});
     defer hashes_file.close();
 
-    const hashes_mapping = try mapping.mapFile(hashes_file);
+    const hashes_mapping = try mapping.mapFile(hashes_file, .{});
     defer hashes_mapping.unmap();
 
     const game_hashes = hashes.decompressor(hashes_mapping.view);
@@ -125,26 +144,22 @@ pub fn main() !void {
     const file = try fs.cwd().openFile(src, .{});
     defer file.close();
 
-    const file_mapping = try mapping.mapFile(file);
+    const file_mapping = try mapping.mapFile(file, .{});
     defer file_mapping.unmap();
 
     var file_stream = io.fixedBufferStream(file_mapping.view);
 
     var window_buf: [1 << 17]u8 = undefined;
-    var out_buf: [1 << 17]u8 = undefined;
-
     var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
     defer iter.deinit();
 
     var total_path_timer: u64 = 0;
     var total_path_creation_timer: u64 = 0;
-    var total_decompression_timer: u64 = 0;
     var total_write_timer: u64 = 0;
 
-    // We need to optimize this solution is single thread enviroment first, then we can add multi threading and async io (idk how async io would work here, prob would be even slower)
-    // check if on releaseFast zig has runtime safety idk why we're slow
+    // We need to optimize this solution in single thread enviroment first, then we can add multi threading and async io (idk how async io would work here, prob would be even slower)
     var timer = try std.time.Timer.start();
-    while (try iter.next()) |entry| {
+    while (try iter.next()) |entry| { // iterating is instant what inside is slowing us down
         var path_timer = try std.time.Timer.start();
         const path = game_hashes.get(entry.hash).?;
         const path_time = path_timer.read();
@@ -152,74 +167,60 @@ pub fn main() !void {
         total_path_timer += path_time;
 
         var path_creation = try time.Timer.start();
-        // this part is the slowerst
+        // this part is now the slowerst,
+        //  it is slow cuz this code contains too many syscalls if we can reduce those system calls to the lowest we would prob go "blazingly" fast
+        //  we should implement our own logic for creating paths and not use zigs, cuz they seem to overuse systemcalls
+        //  one idea is we try to build our path progress in heap so we could quickly check if dir exists, if not we can get the path we need to create
         if (fs.path.dirname(path)) |dir| {
-            try out_dir.makePath(dir);
+            const filename_w = try std.os.windows.sliceToPrefixedFileW(null, dir);
+            _ = std.os.windows.GetFileAttributesW(filename_w.span().ptr) catch |err| switch (err) {
+                error.FileNotFound => try out_dir.makePath(dir),
+                else => |e| return e,
+            };
         }
 
-        const out_file = out_dir.createFile(path, .{}) catch |err| switch (err) {
+        const out_file = out_dir.createFile(path, .{ .read = true }) catch |err| switch (err) {
             error.BadPathName => { // add like _invalid path
                 std.debug.print("warn: invalid path:  {s}.\n", .{path});
                 continue;
             },
             else => return err,
         };
+        //_ = try windows.sliceToPrefixedFileW(fs.cwd().fd, path);
         total_path_creation_timer += path_creation.read();
         defer out_file.close();
 
-        //std.debug.print("writting: {s}\n", .{path});
+        const m = try mapping.mapFile(out_file, .{
+            .mode = .write_only,
+            .size = entry.decompressed_len,
+        });
+        defer m.unmap();
 
-        // we should bench like creating mmap for a whole file, cuz we know out size
         switch (entry.decompressor) {
             .none => |stream| {
-                var len: usize = 0;
-                while (entry.decompressed_len > len) {
-                    var decompression_timer = try std.time.Timer.start();
-                    const amt = try stream.readAll(out_buf[0..@min(out_buf.len, entry.decompressed_len - len)]);
-                    const decompression_time = decompression_timer.read();
-
-                    total_decompression_timer += decompression_time;
-
-                    len += amt;
-
-                    var write_timer = try std.time.Timer.start();
-                    try out_file.writeAll(out_buf[0..amt]);
-                    const write_time = write_timer.read();
-
-                    total_write_timer += write_time;
-                }
-
-                assert(len == entry.decompressed_len);
+                var write_timer = try std.time.Timer.start();
+                assert(try stream.readAll(m.view) == entry.decompressed_len);
+                const write_time = write_timer.read();
+                total_write_timer += write_time;
             },
             .zstd => |zstd_stream| {
-                var len: usize = 0;
-                while (entry.decompressed_len > len) { // cuz if we hit zstd_multi we will have multiple blocks
-                    var decompression_timer = try std.time.Timer.start();
-                    const chunk_len = try zstd_stream.read(&out_buf);
-                    const decompression_time = decompression_timer.read();
-
-                    total_decompression_timer += decompression_time;
-
-                    len += chunk_len;
-
+                var idx: usize = 0;
+                while (entry.decompressed_len > idx) { // cuz if we hit zstd_multi we will have multiple blocks
                     var write_timer = try std.time.Timer.start();
-                    try out_file.writeAll(out_buf[0..chunk_len]);
+                    const amt = try zstd_stream.readAll(m.view[idx..]);
                     const write_time = write_timer.read();
-
                     total_write_timer += write_time;
+
+                    idx += amt;
                 }
-                assert(len == entry.decompressed_len);
+                assert(idx == entry.decompressed_len);
             },
         }
     }
     std.debug.print("extracting took: {d}ms\n", .{timer.read() / time.ns_per_ms});
 
     // all done on Aatrox.wad.client
-    // these benches makes no sence it should extract at worse in 3seconds, but it extracts at 10seconds
-    std.debug.print("total time spent reading entries: {d}ms, avg: {d}us\n", .{ iter.total_read_timer / time.ns_per_ms, iter.total_read_timer / iter.entries_len / time.ns_per_us });
-    std.debug.print("total time spent seeking: {d}ms, avg: {d}us\n", .{ iter.total_seek_timer / time.ns_per_ms, iter.total_seek_timer / iter.entries_len / time.ns_per_us });
     std.debug.print("total time spent getting paths: {d}ms, avg: {d}us\n", .{ total_path_timer / time.ns_per_ms, total_path_timer / iter.entries_len / time.ns_per_us });
-    std.debug.print("total time spent decompressing: {d}ms, avg: {d}us\n", .{ total_decompression_timer / time.ns_per_ms, total_decompression_timer / iter.entries_len / time.ns_per_us });
     std.debug.print("total time spent creating paths: {d}ms, avg: {d}us\n", .{ total_path_creation_timer / time.ns_per_ms, total_path_creation_timer / iter.entries_len / time.ns_per_us });
     std.debug.print("total time spent writing to file: {d}ms, avg: {d}us\n", .{ total_write_timer / time.ns_per_ms, total_write_timer / iter.entries_len / time.ns_per_us });
 }

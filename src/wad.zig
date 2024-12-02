@@ -48,9 +48,6 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
 
         zstd: compress.zstd.Decompressor(ReaderType),
 
-        total_read_timer: u64 = 0,
-        total_seek_timer: u64 = 0,
-
         pub const Entry = struct {
             hash: u64,
             compressed_len: u32,
@@ -72,34 +69,15 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
             if (self.entries_len > self.index) {
                 defer self.index += 1;
 
-                {
-                    var timer = try std.time.Timer.start();
-                    try self.seekable_stream.seekTo(@sizeOf(HeaderV3_4) + @sizeOf(EntryV3_4) * self.index);
-                    const seek_time = timer.read();
-
-                    self.total_seek_timer += seek_time;
-                }
-
-                var timer = try std.time.Timer.start();
+                try self.seekable_stream.seekTo(@sizeOf(HeaderV3_4) + @sizeOf(EntryV3_4) * self.index);
                 const entry: EntryV3_4 = try self.reader.readStruct(EntryV3_4); // add little endian
-                const read_time = timer.read();
-
-                self.total_read_timer += read_time;
-
                 const gb = 1024 * 1024 * 1024;
 
                 assert(4 * gb > entry.compressed_len);
                 assert(4 * gb > entry.decompressed_len);
                 assert(4 * gb > entry.offset);
 
-                {
-                    var t = try std.time.Timer.start();
-                    try self.seekable_stream.seekTo(entry.offset);
-
-                    const seek_time = t.read();
-
-                    self.total_seek_timer += seek_time;
-                }
+                try self.seekable_stream.seekTo(entry.offset);
 
                 if (entry.entry_type == .zstd or entry.entry_type == .zstd_multi) {
                     self.zstd.reset();
