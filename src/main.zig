@@ -97,22 +97,19 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
-pub fn mkFile(sub_path: []const u8) !fs.File {
-    const sub_path_w = try windows.sliceToPrefixedFileW(fs.cwd().fd, sub_path);
-    //std.debug.print("{u}\n", .{sub_path_w.span()});
-    //if (fs.path.dirname(sub_path_w)) |sub_dir| {
-    //_ = sub_dir;
-    // stat
-    //}
+const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
 
-    //var sub_path_buf: [windows.MAX_PA]u16
-
-    return .{
-        .handle = try windows.OpenFile(sub_path_w.span(), .{
-            .dir = fs.cwd().fd,
-            .access_mask = windows.SYNCHRONIZE | windows.GENERIC_WRITE,
-            .creation = windows.FILE_OPEN,
-        }),
+pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
+    return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (fs.path.dirname(sub_path)) |sub_dir| {
+                @setCold(false);
+                try dir.makePath(sub_dir);
+                return dir.createFile(sub_path, .{ .read = true });
+            }
+            return error.FileNotFound;
+        },
+        else => |e| return e,
     };
 }
 
@@ -153,76 +150,37 @@ pub fn main() !void {
     var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
     defer iter.deinit();
 
-    var total_path_timer: u64 = 0;
-    var total_path_creation_timer: u64 = 0;
-    var total_write_timer: u64 = 0;
-
-    // We need to optimize this solution in single thread enviroment first, then we can add multi threading and async io (idk how async io would work here, prob would be even slower)
-    var timer = try std.time.Timer.start();
     while (try iter.next()) |entry| { // iterating is instant what inside is slowing us down
-        var path_timer = try std.time.Timer.start();
         const path = game_hashes.get(entry.hash).?;
-        const path_time = path_timer.read();
-
-        total_path_timer += path_time;
-
-        var path_creation = try time.Timer.start();
-        // this part is now the slowerst,
-        //  it is slow cuz this code contains too many syscalls if we can reduce those system calls to the lowest we would prob go "blazingly" fast
-        //  we should implement our own logic for creating paths and not use zigs, cuz they seem to overuse systemcalls
-        //  one idea is we try to build our path progress in heap so we could quickly check if dir exists, if not we can get the path we need to create
-        if (fs.path.dirname(path)) |dir| {
-            const filename_w = try std.os.windows.sliceToPrefixedFileW(null, dir);
-            _ = std.os.windows.GetFileAttributesW(filename_w.span().ptr) catch |err| switch (err) {
-                error.FileNotFound => try out_dir.makePath(dir),
-                else => |e| return e,
-            };
-        }
-
-        const out_file = out_dir.createFile(path, .{ .read = true }) catch |err| switch (err) {
-            error.BadPathName => { // add like _invalid path
-                std.debug.print("warn: invalid path:  {s}.\n", .{path});
+        const out_file = makeFile(out_dir, path) catch |err| switch (err) {
+            error.BadPathName => {
+                std.debug.print("_invalid: {s}\n", .{path});
                 continue;
             },
-            else => return err,
+            else => |e| return e,
         };
-        //_ = try windows.sliceToPrefixedFileW(fs.cwd().fd, path);
-        total_path_creation_timer += path_creation.read();
         defer out_file.close();
 
-        const m = try mapping.mapFile(out_file, .{
+        const out_maping = try mapping.mapFile(out_file, .{
             .mode = .write_only,
             .size = entry.decompressed_len,
         });
-        defer m.unmap();
+        defer out_maping.unmap();
 
         switch (entry.decompressor) {
             .none => |stream| {
-                var write_timer = try std.time.Timer.start();
-                assert(try stream.readAll(m.view) == entry.decompressed_len);
-                const write_time = write_timer.read();
-                total_write_timer += write_time;
+                assert(try stream.readAll(out_maping.view) == entry.decompressed_len);
             },
             .zstd => |zstd_stream| {
                 var idx: usize = 0;
                 while (entry.decompressed_len > idx) { // cuz if we hit zstd_multi we will have multiple blocks
-                    var write_timer = try std.time.Timer.start();
-                    const amt = try zstd_stream.readAll(m.view[idx..]);
-                    const write_time = write_timer.read();
-                    total_write_timer += write_time;
-
+                    const amt = try zstd_stream.readAll(out_maping.view[idx..]);
                     idx += amt;
                 }
                 assert(idx == entry.decompressed_len);
             },
         }
     }
-    std.debug.print("extracting took: {d}ms\n", .{timer.read() / time.ns_per_ms});
-
-    // all done on Aatrox.wad.client
-    std.debug.print("total time spent getting paths: {d}ms, avg: {d}us\n", .{ total_path_timer / time.ns_per_ms, total_path_timer / iter.entries_len / time.ns_per_us });
-    std.debug.print("total time spent creating paths: {d}ms, avg: {d}us\n", .{ total_path_creation_timer / time.ns_per_ms, total_path_creation_timer / iter.entries_len / time.ns_per_us });
-    std.debug.print("total time spent writing to file: {d}ms, avg: {d}us\n", .{ total_write_timer / time.ns_per_ms, total_write_timer / iter.entries_len / time.ns_per_us });
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
