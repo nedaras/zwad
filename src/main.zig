@@ -102,15 +102,9 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
-    const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
+    const allocator = gpa.allocator();
 
-    var args = cli.parseArguments(allocator) catch |err| switch (err) {
-        error.UnknownArgument => {
-            std.debug.print("{s}", .{cli.help});
-            return;
-        },
-        else => |e| return e,
-    };
+    var args = handleArguments(allocator) orelse return;
     defer args.deinit();
 
     const src = args.options.file orelse return error.ArgumentSrcFileMissing;
@@ -139,7 +133,8 @@ pub fn main() !void {
     var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
     defer iter.deinit();
 
-    while (try iter.next()) |entry| { // iterating is instant what inside is slowing us down
+    // add multithreading
+    while (try iter.next()) |entry| {
         const path = game_hashes.get(entry.hash).?;
         const out_file = makeFile(out_dir, path) catch |err| switch (err) {
             error.BadPathName => {
@@ -170,6 +165,38 @@ pub fn main() !void {
             },
         }
     }
+}
+
+// mb add like error EarlyReturn, Fatal and... so when we wrap main function we could add even more context why we exited
+fn handleArguments(allocator: mem.Allocator) ?cli.Arguments {
+    // should we add logger?
+    var diagnostics = cli.Diagnostics{
+        .allocator = allocator,
+    };
+    defer diagnostics.deinit();
+
+    var args = cli.parseArguments(allocator, .{ .diagnostics = &diagnostics }) catch |err| switch (err) {
+        error.OutOfMemory => {
+            std.debug.print("zwad: Out of memory\n", .{});
+            return null;
+        },
+        error.UnknownOption => unreachable,
+    };
+    errdefer args.deinit();
+
+    if (diagnostics.errors.items.len > 0) {
+        const unknown_option = diagnostics.errors.items[0].unknown_option.option;
+        if (mem.eql(u8, unknown_option, "help")) {
+            std.debug.print(cli.help, .{});
+            return null;
+        }
+
+        std.debug.print("zwad: {s}{s}: unrecognized option\n", .{ if (unknown_option.len == 1) "-" else "--", unknown_option });
+        std.debug.print("Try 'zwad --help' for more information.", .{});
+        return null;
+    }
+
+    return args;
 }
 
 const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;

@@ -5,6 +5,21 @@ const Allocator = mem.Allocator;
 
 pub const help = @embedFile("cli/help.cli");
 
+pub const Diagnostics = struct {
+    allocator: Allocator,
+    errors: std.ArrayListUnmanaged(Error) = .{},
+
+    pub const Error = union(enum) {
+        unknown_option: struct {
+            option: []const u8,
+        },
+    };
+
+    pub fn deinit(self: *Diagnostics) void {
+        self.errors.deinit(self.allocator);
+    }
+};
+
 pub const Arguments = struct {
     iter: std.process.ArgIterator,
 
@@ -22,11 +37,16 @@ pub const Arguments = struct {
     }
 };
 
-pub const ParseArgumentsError = std.process.ArgIterator.InitError || error{
-    UnknownArgument,
+pub const ParseOptions = struct {
+    diagnostics: ?*Diagnostics = null,
 };
 
-pub fn parseArguments(allocator: Allocator) ParseArgumentsError!Arguments {
+pub const ParseArgumentsError = error{
+    OutOfMemory,
+    UnknownOption,
+};
+
+pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgumentsError!Arguments {
     var iter = try std.process.argsWithAllocator(allocator);
     errdefer iter.deinit();
 
@@ -37,13 +57,25 @@ pub fn parseArguments(allocator: Allocator) ParseArgumentsError!Arguments {
     };
 
     while (iter.next()) |arg| {
-        var options = cli.optionIterator(arg);
-        while (options.next()) |option| switch (option) {
+        if (mem.eql(u8, arg, "-") or mem.eql(u8, arg, "--")) { // ignore empty options
+            continue;
+        }
+
+        var options_iter = cli.optionIterator(arg);
+        while (options_iter.next()) |option| switch (option) {
             .list => args.options.list = true,
             .extract => args.options.extract = true,
             .file => {},
             .hashes => {},
-            .unknown => return error.UnknownArgument,
+            .unknown => {
+                if (options.diagnostics) |diagnostics| {
+                    try diagnostics.errors.append(allocator, .{
+                        .unknown_option = .{ .option = if (options_iter.index) |i| arg[i - 1 .. i] else arg[2..] },
+                    });
+                    continue;
+                }
+                return error.UnknownOption;
+            },
         };
     }
 
