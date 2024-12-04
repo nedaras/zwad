@@ -98,13 +98,14 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
+// add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
 
-    var args = handleArguments(allocator) orelse return;
+    var args = handleArguments(allocator) catch return;
     defer args.deinit();
 
     const src = args.options.file orelse return error.ArgumentSrcFileMissing;
@@ -167,8 +168,14 @@ pub fn main() !void {
     }
 }
 
-// mb add like error EarlyReturn, Fatal and... so when we wrap main function we could add even more context why we exited
-fn handleArguments(allocator: mem.Allocator) ?cli.Arguments {
+const HandleError = error{
+    OutOfMemory,
+    EarlyReturn,
+    Fatal,
+    Unexpected,
+};
+
+fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
     // should we add logger?
     var diagnostics = cli.Diagnostics{
         .allocator = allocator,
@@ -178,7 +185,7 @@ fn handleArguments(allocator: mem.Allocator) ?cli.Arguments {
     var args = cli.parseArguments(allocator, .{ .diagnostics = &diagnostics }) catch |err| switch (err) {
         error.OutOfMemory => {
             std.debug.print("zwad: Out of memory\n", .{});
-            return null;
+            return error.OutOfMemory;
         },
         error.UnknownOption => unreachable,
     };
@@ -188,12 +195,12 @@ fn handleArguments(allocator: mem.Allocator) ?cli.Arguments {
         const unknown_option = diagnostics.errors.items[0].unknown_option.option;
         if (mem.eql(u8, unknown_option, "help")) {
             std.debug.print(cli.help, .{});
-            return null;
+            return error.EarlyReturn;
         }
 
         std.debug.print("zwad: {s}{s}: unrecognized option\n", .{ if (unknown_option.len == 1) "-" else "--", unknown_option });
         std.debug.print("Try 'zwad --help' for more information.", .{});
-        return null;
+        return error.EarlyReturn;
     }
 
     return args;
