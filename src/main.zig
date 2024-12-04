@@ -5,6 +5,7 @@ const mapping = @import("mapping.zig");
 const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
 const wad = @import("wad.zig");
+const cli = @import("cli.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -97,35 +98,23 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
-const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
-
-pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
-    return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
-        error.FileNotFound => {
-            if (fs.path.dirname(sub_path)) |sub_dir| {
-                @setCold(false);
-                try dir.makePath(sub_dir);
-                return dir.createFile(sub_path, .{ .read = true });
-            }
-            return error.FileNotFound;
-        },
-        else => |e| return e,
-    };
-}
-
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator(); // todo: use  c_allocator on unsafe release modes
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = cli.parseArguments(allocator) catch |err| switch (err) {
+        error.UnknownArgument => {
+            std.debug.print("{s}", .{cli.help});
+            return;
+        },
+        else => |e| return e,
+    };
     defer args.deinit();
 
-    _ = args.next().?;
-
-    const src = args.next() orelse return error.ArgumentSrcFileMissing;
-    const dst = args.next() orelse return error.ArgumentDstDirMissing;
+    const src = args.options.file orelse return error.ArgumentSrcFileMissing;
+    const dst = args.options.file orelse return error.ArgumentDstDirMissing;
 
     var out_dir = try fs.cwd().makeOpenPath(dst, .{});
     defer out_dir.close();
@@ -181,6 +170,22 @@ pub fn main() !void {
             },
         }
     }
+}
+
+const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
+
+pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
+    return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (fs.path.dirname(sub_path)) |sub_dir| {
+                @setCold(false);
+                try dir.makePath(sub_dir);
+                return dir.createFile(sub_path, .{ .read = true });
+            }
+            return error.FileNotFound;
+        },
+        else => |e| return e,
+    };
 }
 
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed

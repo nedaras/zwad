@@ -1,0 +1,10 @@
+Usage: zwad [OPTION]...  [FILE]...
+Packs many files into a single archive, and can restore individual files from an
+archive.
+
+ Main operation mode:
+  -t, --list                 list the contents of an archive
+  -x, --extract, --get       extract files from an archive
+
+ Device selection and switching:
+  -f, --file=ARCHIVE         use archive file or device ARCHIVE
