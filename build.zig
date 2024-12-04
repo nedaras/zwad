@@ -111,6 +111,8 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibC();
 
+    exe.addIncludePath(b.path("c"));
+
     exe.addIncludePath(xxhash.path(""));
     exe.addCSourceFile(.{
         .file = xxhash.path("xxhash.c"),
