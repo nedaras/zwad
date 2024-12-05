@@ -2,11 +2,11 @@ const std = @import("std");
 const mem = std.mem;
 const assert = std.debug.assert;
 
-pub const Option = enum {
-    extract,
-    list,
-    file,
-    hashes,
+pub const Option = union(enum) {
+    extract: ?[]const u8,
+    list: ?[]const u8,
+    file: ?[]const u8,
+    hashes: ?[]const u8,
     unknown,
 };
 
@@ -14,7 +14,7 @@ pub const OptionIterator = struct {
     buffer: []const u8,
     index: ?usize,
 
-    pub fn next(self: *OptionIterator) ?Option { // ?struct { Option, ?[]const u8 }
+    pub fn next(self: *OptionIterator) ?Option {
         var start = self.index orelse return null;
         if (start == 0) {
             if (self.buffer.len < 2) {
@@ -36,9 +36,9 @@ pub const OptionIterator = struct {
         self.index.? += 1;
 
         return switch (self.buffer[start]) {
-            't' => .list,
-            'x' => .extract,
-            'f' => .file,
+            't' => .{ .list = null },
+            'x' => .{ .extract = null },
+            'f' => .{ .file = null },
             else => .unknown,
         };
     }
@@ -52,10 +52,16 @@ pub fn optionIterator(slice: []const u8) OptionIterator {
     };
 }
 
-fn getOptionFromName(name: []const u8) Option {
-    if (mem.eql(u8, name, "list")) return .list;
-    if (mem.eql(u8, name, "extract")) return .extract;
-    if (mem.eql(u8, name, "get")) return .extract;
-    if (mem.eql(u8, name, "file")) return .file;
+fn getOptionFromName(slice: []const u8) Option {
+    if (slice.len <= 1) return .unknown;
+
+    const end = mem.indexOfScalar(u8, slice, '=');
+    const key = slice[0 .. end orelse slice.len];
+    const val = if (end) |pos| slice[pos + 1 ..] else null;
+
+    if (mem.eql(u8, key, "list")) return .{ .list = val };
+    if (mem.eql(u8, key, "extract")) return .{ .extract = val };
+    if (mem.eql(u8, key, "get")) return .{ .extract = val };
+    if (mem.eql(u8, key, "file")) return .{ .file = val };
     return .unknown;
 }

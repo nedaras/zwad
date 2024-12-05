@@ -108,8 +108,8 @@ pub fn main() !void {
     var args = handleArguments(allocator) catch return;
     defer args.deinit();
 
-    const src = args.options.file orelse return error.ArgumentSrcFileMissing;
-    const dst = args.options.file orelse return error.ArgumentDstDirMissing;
+    const src = null orelse return error.ArgumentSrcFileMissing;
+    const dst = null orelse return error.ArgumentDstDirMissing;
 
     var out_dir = try fs.cwd().makeOpenPath(dst, .{});
     defer out_dir.close();
@@ -187,18 +187,26 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
             std.debug.print("zwad: Out of memory\n", .{});
             return error.OutOfMemory;
         },
-        error.UnknownOption => unreachable,
+        else => unreachable,
     };
     errdefer args.deinit();
 
     if (diagnostics.errors.items.len > 0) {
-        const unknown_option = diagnostics.errors.items[0].unknown_option.option;
-        if (mem.eql(u8, unknown_option, "help")) {
-            std.debug.print(cli.help, .{});
-            return error.EarlyReturn;
+        switch (diagnostics.errors.items[0]) {
+            .unknown_option => |err| {
+                if (mem.eql(u8, err.option, "help")) {
+                    std.debug.print(cli.help, .{});
+                    return error.EarlyReturn;
+                }
+                std.debug.print("zwad: unrecognized option '{s}{s}'\n", .{ if (err.option.len == 1) "-" else "--", err.option });
+            },
+            .unexpected_argument => |err| {
+                std.debug.print("zwad: option '--{s}' doesn't allow an argument\n", .{err.option});
+            },
+            .empty_argument => |err| {
+                std.debug.print("zwad: option '--{s}' doesn't allow empty argument\n", .{err.option});
+            },
         }
-
-        std.debug.print("zwad: {s}{s}: unrecognized option\n", .{ if (unknown_option.len == 1) "-" else "--", unknown_option });
         std.debug.print("Try 'zwad --help' for more information.", .{});
         return error.EarlyReturn;
     }
