@@ -39,6 +39,7 @@ pub const OptionIterator = struct {
             't' => .{ .list = null },
             'x' => .{ .extract = null },
             'f' => .{ .file = null },
+            'h' => .{ .hashes = null },
             else => .unknown,
         };
     }
@@ -63,5 +64,6 @@ fn getOptionFromName(slice: []const u8) Option {
     if (mem.eql(u8, key, "extract")) return .{ .extract = val };
     if (mem.eql(u8, key, "get")) return .{ .extract = val };
     if (mem.eql(u8, key, "file")) return .{ .file = val };
+    if (mem.eql(u8, key, "hashes")) return .{ .hashes = val };
     return .unknown;
 }

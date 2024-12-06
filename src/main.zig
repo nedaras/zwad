@@ -108,6 +108,14 @@ pub fn main() !void {
     var args = handleArguments(allocator) catch return;
     defer args.deinit();
 
+    if (args.options.file) |file| {
+        std.debug.print("{s}\n", .{file});
+    }
+
+    if (args.options.hashes) |h| {
+        std.debug.print("{s}\n", .{h});
+    }
+
     const src = null orelse return error.ArgumentSrcFileMissing;
     const dst = null orelse return error.ArgumentDstDirMissing;
 
@@ -204,7 +212,7 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
                 std.debug.print("zwad: option '--{s}' doesn't allow an argument\n", .{err.option});
             },
             .empty_argument => |err| {
-                std.debug.print("zwad: option '--{s}' doesn't allow empty argument\n", .{err.option});
+                std.debug.print("zwad: option '{s}{s}' requires an argument\n", .{ if (err.option.len == 1) "-" else "--", err.option });
             },
         }
         std.debug.print("Try 'zwad --help' for more information.", .{});

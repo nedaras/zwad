@@ -120,13 +120,15 @@ pub fn getErrorCode(code: usize) ZSTDError {
 }
 
 pub fn unexpectedError(err: ZSTDError) UnexpectedError {
-    const code = 0 -% @as(usize, @intCast(@intFromEnum(err)));
+    if (std.posix.unexpected_error_tracing) {
+        const code = 0 -% @as(usize, @intCast(@intFromEnum(err)));
 
-    std.debug.print("error.Unexpected: ZSTD_getErrorCode({d}): {s}\n", .{
-        @intFromEnum(err),
-        zstd.ZSTD_getErrorName(code),
-    });
-    std.debug.dumpCurrentStackTrace(@returnAddress());
+        std.debug.print("error.Unexpected: ZSTD_getErrorCode({d}): {s}\n", .{
+            @intFromEnum(err),
+            zstd.ZSTD_getErrorName(code),
+        });
+        std.debug.dumpCurrentStackTrace(@returnAddress());
+    }
 
     return error.Unexpected;
 }

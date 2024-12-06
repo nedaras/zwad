@@ -71,8 +71,15 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
     var files = std.ArrayList([]const u8).init(allocator);
     defer files.deinit();
 
+    const Index = struct { u8, isize };
+    var map = [_]Index{
+        .{ 'f', -1 },
+        .{ 'h', -1 },
+    };
+
+    var idx: usize = 0;
     var flag = false;
-    while (iter.next()) |arg| {
+    while (iter.next()) |arg| : (idx += 1) {
         if (arg.len < 2 or (arg[0] != '-' or mem.eql(u8, arg, "--"))) {
             flag = true;
         }
@@ -83,7 +90,7 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         }
 
         var options_iter = cli.optionIterator(arg);
-        while (options_iter.next()) |option| switch (option) {
+        while (options_iter.next()) |option| : (idx += 1) switch (option) {
             .list => |val| {
                 if (val != null) {
                     assert(options_iter.index == null);
@@ -118,9 +125,34 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
                     }
                     return error.EmptyArgument;
                 }
-                args.options.file = val;
+                if (val == null) {
+                    for (&map) |*i| if (i[0] == 'f') {
+                        i[1] = @intCast(idx);
+                        break;
+                    };
+                } else {
+                    args.options.hashes = val;
+                }
             },
-            .hashes => {},
+            .hashes => |val| {
+                if (val != null and val.?.len == 0) {
+                    assert(options_iter.index == null);
+                    const end = arg.len - val.?.len - 1;
+                    if (options.diagnostics) |diagnostics| {
+                        try diagnostics.errors.append(allocator, .{ .empty_argument = .{ .option = arg[2..end] } });
+                        continue;
+                    }
+                    return error.EmptyArgument;
+                }
+                if (val == null) {
+                    for (&map) |*i| if (i[0] == 'h') {
+                        i[1] = @intCast(idx);
+                        break;
+                    };
+                } else {
+                    args.options.hashes = val;
+                }
+            },
             .unknown => {
                 if (options.diagnostics) |diagnostics| {
                     try diagnostics.errors.append(allocator, .{
@@ -133,6 +165,41 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         };
     }
 
+    const Context = struct {
+        pub fn lessThan(self: @This(), a: Index, b: Index) bool {
+            _ = self;
+            return a[1] < b[1];
+        }
+    };
+    std.sort.block(Index, &map, Context{}, Context.lessThan);
+
+    var len: usize = map.len;
+    for (map, 0..) |item, i| {
+        const o, const n = item;
+        assert(o == 'f' or o == 'h');
+        if (n == -1) {
+            len -= 1;
+            continue;
+        }
+
+        if (i >= files.items.len) {
+            len -= 1;
+            if (options.diagnostics) |diagnostics| {
+                try diagnostics.errors.append(allocator, .{ .empty_argument = .{ .option = &.{o} } });
+                continue;
+            }
+            return error.EmptyArgument;
+        }
+
+        if (o == 'f') {
+            args.options.file = files.items[i];
+            continue;
+        }
+        args.options.hashes = files.items[i];
+    }
+
+    files.replaceRange(0, len, &.{}) catch unreachable; // we're removing elements so it cant error
     args.files = try files.toOwnedSlice();
+
     return args;
 }
