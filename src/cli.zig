@@ -20,6 +20,8 @@ pub const Diagnostics = struct {
         empty_argument: struct {
             option: []const u8,
         },
+        missing_operation,
+        multiple_operations,
     };
 
     pub fn deinit(self: *Diagnostics) void {
@@ -27,13 +29,17 @@ pub const Diagnostics = struct {
     }
 };
 
+pub const Action = enum {
+    extract,
+    list,
+};
+
 pub const Arguments = struct {
     allocator: Allocator,
     iter: std.process.ArgIterator,
 
+    operation: Action,
     options: struct {
-        extract: bool = false,
-        list: bool = false,
         file: ?[]const u8 = null,
         hashes: ?[]const u8 = null,
     } = .{},
@@ -55,6 +61,8 @@ pub const ParseArgumentsError = error{
     UnknownOption,
     UnexpectedArgument,
     EmptyArgument,
+    MissingOperation,
+    MultipleOperations,
 };
 
 pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgumentsError!Arguments {
@@ -66,7 +74,10 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
     var args = Arguments{
         .allocator = allocator,
         .iter = iter,
+        .operation = undefined,
     };
+
+    var operation: ?Action = null;
 
     var files = std.ArrayList([]const u8).init(allocator);
     defer files.deinit();
@@ -93,6 +104,13 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         // todo: prob would be a good anida to reduce some lines
         while (options_iter.next()) |option| : (idx += 1) switch (option) {
             .list => |val| {
+                if (operation != null) {
+                    if (options.diagnostics) |diagnostics| {
+                        try diagnostics.errors.append(allocator, .multiple_operations);
+                        continue;
+                    }
+                    return error.MultipleOperations;
+                }
                 if (val != null) {
                     assert(options_iter.index == null);
                     const end = arg.len - val.?.len - 1;
@@ -102,9 +120,16 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
                     }
                     return error.UnexpectedArgument;
                 }
-                args.options.list = true;
+                operation = .list;
             },
             .extract => |val| {
+                if (operation != null) {
+                    if (options.diagnostics) |diagnostics| {
+                        try diagnostics.errors.append(allocator, .multiple_operations);
+                        continue;
+                    }
+                    return error.MultipleOperations;
+                }
                 if (val != null) {
                     assert(options_iter.index == null);
                     const end = arg.len - val.?.len - 1;
@@ -114,7 +139,7 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
                     }
                     return error.UnexpectedArgument;
                 }
-                args.options.extract = true;
+                operation = .extract;
             },
             .file => |val| {
                 if (val != null and val.?.len == 0) {
@@ -166,6 +191,14 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         };
     }
 
+    if (operation == null) {
+        if (options.diagnostics) |diagnostics| {
+            try diagnostics.errors.append(allocator, .missing_operation);
+            return args;
+        }
+        return error.MissingOperation;
+    }
+
     const Context = struct {
         pub fn lessThan(self: @This(), a: Index, b: Index) bool {
             _ = self;
@@ -200,7 +233,9 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
     }
 
     files.replaceRange(0, len, &.{}) catch unreachable; // we're removing elements so it cant error
+
     args.files = try files.toOwnedSlice();
+    args.operation = operation.?;
 
     return args;
 }
