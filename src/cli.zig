@@ -90,6 +90,7 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         }
 
         var options_iter = cli.optionIterator(arg);
+        // todo: prob would be a good anida to reduce some lines
         while (options_iter.next()) |option| : (idx += 1) switch (option) {
             .list => |val| {
                 if (val != null) {
@@ -185,7 +186,7 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         if (i >= files.items.len) {
             len -= 1;
             if (options.diagnostics) |diagnostics| {
-                try diagnostics.errors.append(allocator, .{ .empty_argument = .{ .option = &.{o} } });
+                try diagnostics.errors.append(allocator, .{ .empty_argument = .{ .option = if (o == 'f') "f" else "h" } });
                 continue;
             }
             return error.EmptyArgument;
