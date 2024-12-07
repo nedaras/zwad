@@ -6,6 +6,7 @@ const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
 const wad = @import("wad.zig");
 const cli = @import("cli.zig");
+const errors = @import("errors.zig");
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -108,6 +109,13 @@ pub fn main() !void {
     var args = handleArguments(allocator) catch return;
     defer args.deinit();
 
+    if (true) {
+        return switch (args.operation) {
+            .list => try list(allocator, args.options),
+            else => {},
+        };
+    }
+
     const src = null orelse return error.ArgumentSrcFileMissing;
     const dst = null orelse return error.ArgumentDstDirMissing;
 
@@ -166,6 +174,73 @@ pub fn main() !void {
             },
         }
     }
+}
+
+// put this somewhere lese then in main
+pub fn list(allocator: mem.Allocator, options: cli.Options) !void {
+    const src = options.file orelse @panic("not implemented"); // we rly should start working on linux
+
+    const file = fs.cwd().openFile(src, .{}) catch |err| return switch (err) {
+        else => |e| std.debug.print("zwad: {s}: Cannot open: {s}\n", .{ src, errors.stringify(e) }),
+        error.FileBusy => unreachable, // read-only
+        error.NoSpaceLeft => unreachable, // read-only
+        error.PathAlreadyExists => unreachable, // read-only
+        error.WouldBlock => unreachable, // not using O_NONBLOCK
+        error.FileLocksNotSupported => unreachable, // no lock requested
+        error.NotDir => unreachable, // should not err
+    };
+    defer file.close();
+
+    const file_map = mapping.mapFile(file, .{}) catch |err| return switch (err) {
+        error.NoSpaceLeft => unreachable, // not using size
+        else => |e| std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ src, errors.stringify(e) }),
+    };
+    defer file_map.unmap();
+
+    var fbs = io.fixedBufferStream(file_map.view);
+    var iter = try wad.iterator(allocator, fbs.reader(), fbs.seekableStream(), undefined);
+    defer iter.deinit();
+
+    const stdout = std.io.getStdOut();
+    var bw = io.bufferedWriter(stdout.writer());
+
+    const writer = bw.writer();
+
+    if (options.hashes) |h| {
+        const hashes_file = fs.cwd().openFile(h, .{}) catch |err| return switch (err) {
+            else => |e| std.debug.print("zwad: {s}: Cannot open: {s}\n", .{ src, errors.stringify(e) }),
+            error.FileBusy => unreachable, // read-only
+            error.NoSpaceLeft => unreachable, // read-only
+            error.PathAlreadyExists => unreachable, // read-only
+            error.WouldBlock => unreachable, // not using O_NONBLOCK
+            error.FileLocksNotSupported => unreachable, // no lock requested
+            error.NotDir => unreachable, // prob will not err
+        };
+        defer hashes_file.close();
+
+        const hashes_map = mapping.mapFile(hashes_file, .{}) catch |err| return switch (err) {
+            error.NoSpaceLeft => unreachable, // not using size
+            else => |e| std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ src, errors.stringify(e) }),
+        };
+        defer hashes_map.unmap();
+
+        // add magic to hashes file
+        const game_hashes = hashes.decompressor(hashes_map.view);
+
+        while (try iter.next()) |entry| {
+            if (game_hashes.get(entry.hash)) |path| {
+                writer.print("{s}\n", .{path}) catch return;
+                continue;
+            }
+            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
+        }
+    } else {
+        while (try iter.next()) |entry| {
+            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
+        }
+    }
+
+    bw.flush() catch return;
 }
 
 const HandleError = error{

@@ -34,15 +34,17 @@ pub const Action = enum {
     list,
 };
 
+pub const Options = struct {
+    file: ?[]const u8,
+    hashes: ?[]const u8,
+};
+
 pub const Arguments = struct {
     allocator: Allocator,
     iter: std.process.ArgIterator,
 
     operation: Action,
-    options: struct {
-        file: ?[]const u8 = null,
-        hashes: ?[]const u8 = null,
-    } = .{},
+    options: Options,
 
     files: []const []const u8 = &.{},
 
@@ -75,6 +77,10 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         .allocator = allocator,
         .iter = iter,
         .operation = undefined,
+        .options = .{
+            .file = null,
+            .hashes = null,
+        },
     };
 
     var operation: ?Action = null;
@@ -208,13 +214,16 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
     std.sort.block(Index, &map, Context{}, Context.lessThan);
 
     var len: usize = map.len;
-    for (map, 0..) |item, i| {
+    var i: usize = 0;
+    for (map) |item| {
         const o, const n = item;
         assert(o == 'f' or o == 'h');
         if (n == -1) {
             len -= 1;
             continue;
         }
+
+        defer i += 1;
 
         if (i >= files.items.len) {
             len -= 1;

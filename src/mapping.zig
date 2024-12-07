@@ -22,7 +22,8 @@ pub const MappedFile = struct {
 pub const MapFileError = error{
     AccessDenied,
     SystemResources,
-    Unseekable,
+    SharingViolation,
+    NoSpaceLeft,
     Unexpected,
 };
 
@@ -41,12 +42,19 @@ pub const MapFlags = struct {
 
 // todo: add linux support
 /// Call unmap after use.
-pub fn mapFile(file: fs.File, flags: MapFlags) MapFileError!MappedFile {
+pub fn mapFile(file: fs.File, flags: MapFlags) !MappedFile {
     if (!is_windows) @compileError("mapFile is not yet implemented for posix");
 
-    const size = flags.size orelse try file.getEndPos();
+    const size = flags.size orelse file.getEndPos() catch |err| switch (err) {
+        error.Unseekable => unreachable,
+        else => |e| return e,
+    };
 
-    const handle = try windows.CreateFileMappingA(file.handle, null, if (flags.isWrite()) @as(u32, windows.PAGE_READWRITE) else @as(u32, windows.PAGE_READONLY), 0, @intCast(size), null); // todo: not cast and add higher size
+    const handle = windows.CreateFileMappingA(file.handle, null, if (flags.isWrite()) @as(u32, windows.PAGE_READWRITE) else @as(u32, windows.PAGE_READONLY), 0, @intCast(size), null) catch |err| switch (err) {
+        error.FileNotFound => unreachable, // not naming mapping
+        error.PathAlreadyExists => unreachable, // not naming mapping
+        else => |e| return e,
+    }; // todo: not cast and add higher size
     const view = try windows.MapViewOfFile(handle, (if (flags.isRead()) @as(u32, windows.FILE_MAP_READ) else 0) | (if (flags.isWrite()) @as(u32, windows.FILE_MAP_WRITE) else 0), 0, 0, size);
 
     return .{
