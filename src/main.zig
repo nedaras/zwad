@@ -105,12 +105,12 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    var args = handleArguments(allocator) catch |err| errors.handle(err);
+    var args = errors.handle(handleArguments(allocator));
     defer args.deinit();
 
     if (true) {
         return switch (args.operation) {
-            .list => cli.list(allocator, args.options) catch |err| errors.handle(err),
+            .list => errors.handle(cli.list(allocator, args.options)),
             else => {},
         };
     }

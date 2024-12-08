@@ -52,15 +52,18 @@ pub fn stringify(err: Error) [:0]const u8 {
     };
 }
 
-pub fn handle(err: HandleError) noreturn {
-    const exit_code: u8 = if (err == error.Fatal or err == error.OutOfMemory or err == error.Unexpected) 1 else 0;
-    switch (err) {
-        error.Usage => std.debug.print(@embedFile("./cli/messages/usage.cli"), .{}),
-        error.Fatal => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
-        error.Outdated => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
-        error.OutOfMemory => std.debug.print(@embedFile("./cli/messages/oof.cli"), .{}),
-        error.Unexpected => std.debug.print(@embedFile("./cli/messages/unexpected.cli"), .{}),
-        error.Exit => {},
-    }
-    std.process.exit(exit_code);
+pub fn handle(v: anytype) @typeInfo(@TypeOf(v)).ErrorUnion.payload {
+    if (@typeInfo(@TypeOf(v)).ErrorUnion.error_set != HandleError) @compileError("handle expects to have HandleError!T union");
+    return v catch |err| {
+        const exit_code: u8 = if (err == error.Fatal or err == error.OutOfMemory or err == error.Unexpected) 1 else 0;
+        switch (err) {
+            error.Usage => std.debug.print(@embedFile("./cli/messages/usage.cli"), .{}),
+            error.Fatal => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
+            error.Outdated => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
+            error.OutOfMemory => std.debug.print(@embedFile("./cli/messages/oof.cli"), .{}),
+            error.Unexpected => std.debug.print(@embedFile("./cli/messages/unexpected.cli"), .{}),
+            error.Exit => {},
+        }
+        std.process.exit(exit_code);
+    };
 }
