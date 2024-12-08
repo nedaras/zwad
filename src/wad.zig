@@ -100,12 +100,19 @@ pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) ty
     };
 }
 
-pub fn iterator(allocator: Allocator, reader: anytype, seekable_steam: anytype, window_buffer: []u8) !Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
-    const header: HeaderV3_4 = try reader.readStruct(HeaderV3_4); // add little endian
+pub const IteratorError = error{
+    Corrupted,
+    InvalidVersion,
+    OutOfMemory,
+    Unexpected,
+};
 
-    assert(mem.eql(u8, &header.version.magic, "RW")); // ret error
-    assert(header.version.major == 3); // add multi version stuff
-    assert(header.version.minor == 4); // add multi version stuff
+pub fn iterator(allocator: Allocator, reader: anytype, seekable_steam: anytype, window_buffer: []u8) IteratorError!Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
+    const header: HeaderV3_4 = reader.readStruct(HeaderV3_4) catch return error.Corrupted; // add little endian and not nice that we just catching
+
+    if (!mem.eql(u8, &header.version.magic, "RW")) return error.Corrupted;
+    if (header.version.major != 3) return error.InvalidVersion;
+    if (header.version.minor != 4) return error.InvalidVersion;
 
     return .{
         .allocator = allocator,

@@ -9,3 +9,7 @@ archive.
  Device selection and switching:
   -f, --file=ARCHIVE         use archive file or device ARCHIVE
   -h, --hashes=FILE          use hashes file or device FILE
+ 
+ Informative output:
+  -v, --verbose              verbosely list files processed
+

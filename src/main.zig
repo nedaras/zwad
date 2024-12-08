@@ -1,6 +1,4 @@
 const std = @import("std");
-const xxhash = @import("xxhash.zig");
-const windows = @import("windows.zig");
 const mapping = @import("mapping.zig");
 const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
@@ -14,6 +12,7 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 const time = std.time;
+const HandleError = errors.HandleError;
 
 pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
@@ -106,12 +105,12 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    var args = handleArguments(allocator) catch return;
+    var args = handleArguments(allocator) catch |err| errors.handle(err);
     defer args.deinit();
 
     if (true) {
         return switch (args.operation) {
-            .list => try list(allocator, args.options),
+            .list => cli.list(allocator, args.options) catch |err| errors.handle(err),
             else => {},
         };
     }
@@ -176,80 +175,6 @@ pub fn main() !void {
     }
 }
 
-// put this somewhere lese then in main
-pub fn list(allocator: mem.Allocator, options: cli.Options) !void {
-    const src = options.file orelse @panic("not implemented"); // we rly should start working on linux
-
-    const file = fs.cwd().openFile(src, .{}) catch |err| return switch (err) {
-        else => |e| std.debug.print("zwad: {s}: Cannot open: {s}\n", .{ src, errors.stringify(e) }),
-        error.FileBusy => unreachable, // read-only
-        error.NoSpaceLeft => unreachable, // read-only
-        error.PathAlreadyExists => unreachable, // read-only
-        error.WouldBlock => unreachable, // not using O_NONBLOCK
-        error.FileLocksNotSupported => unreachable, // no lock requested
-        error.NotDir => unreachable, // should not err
-    };
-    defer file.close();
-
-    const file_map = mapping.mapFile(file, .{}) catch |err| return switch (err) {
-        error.NoSpaceLeft => unreachable, // not using size
-        else => |e| std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ src, errors.stringify(e) }),
-    };
-    defer file_map.unmap();
-
-    var fbs = io.fixedBufferStream(file_map.view);
-    var iter = try wad.iterator(allocator, fbs.reader(), fbs.seekableStream(), undefined);
-    defer iter.deinit();
-
-    const stdout = std.io.getStdOut();
-    var bw = io.bufferedWriter(stdout.writer());
-
-    const writer = bw.writer();
-
-    if (options.hashes) |h| {
-        const hashes_file = fs.cwd().openFile(h, .{}) catch |err| return switch (err) {
-            else => |e| std.debug.print("zwad: {s}: Cannot open: {s}\n", .{ src, errors.stringify(e) }),
-            error.FileBusy => unreachable, // read-only
-            error.NoSpaceLeft => unreachable, // read-only
-            error.PathAlreadyExists => unreachable, // read-only
-            error.WouldBlock => unreachable, // not using O_NONBLOCK
-            error.FileLocksNotSupported => unreachable, // no lock requested
-            error.NotDir => unreachable, // prob will not err
-        };
-        defer hashes_file.close();
-
-        const hashes_map = mapping.mapFile(hashes_file, .{}) catch |err| return switch (err) {
-            error.NoSpaceLeft => unreachable, // not using size
-            else => |e| std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ src, errors.stringify(e) }),
-        };
-        defer hashes_map.unmap();
-
-        // add magic to hashes file
-        const game_hashes = hashes.decompressor(hashes_map.view);
-
-        while (try iter.next()) |entry| {
-            if (game_hashes.get(entry.hash)) |path| {
-                writer.print("{s}\n", .{path}) catch return;
-                continue;
-            }
-            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
-        }
-    } else {
-        while (try iter.next()) |entry| {
-            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
-        }
-    }
-
-    bw.flush() catch return;
-}
-
-const HandleError = error{
-    OutOfMemory,
-    EarlyReturn,
-    Fatal,
-    Unexpected,
-};
-
 fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
     // should we add logger?
     var diagnostics = cli.Diagnostics{
@@ -257,11 +182,8 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
     };
     defer diagnostics.deinit();
 
-    var args = cli.parseArguments(allocator, .{ .diagnostics = &diagnostics }) catch |err| switch (err) {
-        error.OutOfMemory => {
-            std.debug.print("zwad: Out of memory\n", .{});
-            return error.OutOfMemory;
-        },
+    var args = cli.parseArguments(allocator, .{ .diagnostics = &diagnostics }) catch |err| return switch (err) {
+        error.OutOfMemory => |e| e,
         else => unreachable,
     };
     errdefer args.deinit();
@@ -271,7 +193,7 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
             .unknown_option => |err| {
                 if (mem.eql(u8, err.option, "help")) {
                     std.debug.print(cli.help, .{});
-                    return error.EarlyReturn;
+                    return error.Exit;
                 }
                 std.debug.print("zwad: unrecognized option '{s}{s}'\n", .{ if (err.option.len == 1) "-" else "--", err.option });
             },
@@ -288,8 +210,7 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
                 std.debug.print("zwad: You may not specify more than one '-ctx' option\n", .{});
             },
         }
-        std.debug.print("Try 'zwad --help' for more information.", .{});
-        return error.EarlyReturn;
+        return error.Usage;
     }
 
     return args;
