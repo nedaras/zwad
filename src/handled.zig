@@ -75,7 +75,13 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
     };
 
     const file_map = mapping.mapFile(file, .{ .mode = flags.mode, .size = flags.size }) catch |err| {
-        std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ sub_path, errors.stringify(err) });
+        const msg = switch (err) {
+            error.InvalidSize => "File is empty",
+            error.LockedMemoryLimitExceeded => unreachable, // no lock requested
+            else => |e| errors.stringify(e),
+        };
+
+        std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ sub_path, msg });
         return if (err == error.Unexpected) error.Unexpected else error.Fatal;
     };
 

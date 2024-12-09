@@ -11,7 +11,7 @@ const Allocator = std.mem.Allocator;
 const HandleError = handled.HandleError;
 
 pub fn list(allocator: Allocator, options: Options) HandleError!void {
-    const src = options.file orelse @panic("not implemented"); // we rly should start working on linux
+    const src = options.file orelse @panic("not implemented, add -f option"); // we rly should start working on linux
 
     const file_map = try handled.map(fs.cwd(), src, .{});
     defer file_map.deinit();

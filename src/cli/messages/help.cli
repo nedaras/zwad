@@ -1,4 +1,5 @@
 Usage: zwad [OPTION]...  [FILE]...
+
 Packs many files into a single archive, and can restore individual files from an
 archive.
 
