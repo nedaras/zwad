@@ -4,7 +4,8 @@ const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
 const wad = @import("wad.zig");
 const cli = @import("cli.zig");
-const errors = @import("errors.zig");
+const handle = @import("handled.zig").handle;
+const HandleError = @import("handled.zig").HandleError;
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -12,7 +13,6 @@ const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 const native_endian = @import("builtin").target.cpu.arch.endian();
 const time = std.time;
-const HandleError = errors.HandleError;
 
 pub fn main_generate_hashes() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
@@ -105,12 +105,12 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    var args = errors.handle(handleArguments(allocator));
+    var args = handle(handleArguments(allocator));
     defer args.deinit();
 
     if (true) {
         return switch (args.operation) {
-            .list => errors.handle(cli.list(allocator, args.options)),
+            .list => handle(cli.list(allocator, args.options)),
             else => {},
         };
     }

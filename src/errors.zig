@@ -19,19 +19,16 @@ pub const Error = error{
     SystemFdQuotaExceeded,
     ProcessFdQuotaExceeded,
     IsDir,
+    PathAlreadyExists,
+    FileBusy,
+    NoSpaceLeft,
+    WouldBlock,
+    FileLocksNotSupported,
+    NotDir,
     Unexpected,
 };
 
-pub const HandleError = error{
-    Usage, // bad usage
-    Fatal, // unrecoverable error
-    Outdated, // need to update zwad
-    Exit, // handled
-    OutOfMemory,
-    Unexpected,
-};
-
-pub fn stringify(err: Error) [:0]const u8 {
+pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors more expresive
     return switch (err) {
         error.FileNotFound => "No such file or directory",
         error.AccessDenied => "Permission denied",
@@ -48,22 +45,12 @@ pub fn stringify(err: Error) [:0]const u8 {
         error.SystemFdQuotaExceeded => "System quota exceeded",
         error.ProcessFdQuotaExceeded => "Too many open files",
         error.IsDir => "Is a directory",
+        error.PathAlreadyExists => "File exists",
+        error.FileBusy => "Text file busy",
+        error.NoSpaceLeft => "No space left on device",
+        error.WouldBlock => "Operation would block",
+        error.FileLocksNotSupported => "Operation not supported",
+        error.NotDir => "Not a directory",
         error.Unexpected => "Unknown error",
-    };
-}
-
-pub fn handle(v: anytype) @typeInfo(@TypeOf(v)).ErrorUnion.payload {
-    if (@typeInfo(@TypeOf(v)).ErrorUnion.error_set != HandleError) @compileError("handle expects to have HandleError!T union");
-    return v catch |err| {
-        const exit_code: u8 = if (err == error.Fatal or err == error.OutOfMemory or err == error.Unexpected) 1 else 0;
-        switch (err) {
-            error.Usage => std.debug.print(@embedFile("./cli/messages/usage.cli"), .{}),
-            error.Fatal => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
-            error.Outdated => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
-            error.OutOfMemory => std.debug.print(@embedFile("./cli/messages/oof.cli"), .{}),
-            error.Unexpected => std.debug.print(@embedFile("./cli/messages/unexpected.cli"), .{}),
-            error.Exit => {},
-        }
-        std.process.exit(exit_code);
     };
 }
