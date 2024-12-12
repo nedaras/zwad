@@ -11,7 +11,9 @@ const io = std.io;
 const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
-const native_endian = @import("builtin").target.cpu.arch.endian();
+const builtin = @import("builtin");
+const native_endian = builtin.target.cpu.arch.endian();
+const is_windows = builtin.os.tag == .windows;
 const time = std.time;
 
 pub fn main_generate_hashes() !void {
@@ -100,6 +102,15 @@ pub fn main_generate_hashes() !void {
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 pub fn main() !void {
+    const stdin = std.io.getStdIn();
+
+    if (is_windows) {
+        // idk
+    } else {
+        const tty = std.posix.isatty(stdin.handle);
+        std.debug.print("{}\n", .{tty});
+    }
+
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
