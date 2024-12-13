@@ -108,7 +108,7 @@ pub fn main() !void {
 
     if (true) {
         return switch (args.operation) {
-            .list => handle(cli.list(allocator, args.options)),
+            .list => handle(cli.list(args.options)),
             else => {},
         };
     }

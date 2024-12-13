@@ -25,6 +25,13 @@ pub const Error = error{
     WouldBlock,
     FileLocksNotSupported,
     NotDir,
+    InputOutput,
+    ConnectionResetByPeer,
+    ConnectionTimedOut,
+    SocketNotConnected,
+    NotOpenForReading,
+    OperationAborted,
+    BrokenPipe,
     Unexpected,
 };
 
@@ -51,6 +58,11 @@ pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors
         error.WouldBlock => "Operation would block",
         error.FileLocksNotSupported => "Operation not supported",
         error.NotDir => "Not a directory",
+        error.InputOutput => "Input/output error",
+        error.ConnectionResetByPeer, error.OperationAborted => "Connection reset by peer",
+        error.ConnectionTimedOut => "Connection timed out",
+        error.SocketNotConnected => "Transport endpoint is not connected",
+        error.NotOpenForReading, error.BrokenPipe => "File descriptor in bad state",
         error.Unexpected => "Unknown error",
     };
 }

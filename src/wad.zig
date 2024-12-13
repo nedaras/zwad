@@ -4,6 +4,8 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
+pub const header = @import("./wad/header.zig");
+
 const HeaderV3_4 = extern struct {
     const Version = extern struct {
         magic: [2]u8,
@@ -108,17 +110,17 @@ pub const IteratorError = error{
 };
 
 pub fn iterator(allocator: Allocator, reader: anytype, seekable_steam: anytype, window_buffer: []u8) IteratorError!Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
-    const header: HeaderV3_4 = reader.readStruct(HeaderV3_4) catch return error.Corrupted; // add little endian and not nice that we just catching
+    const head: HeaderV3_4 = reader.readStruct(HeaderV3_4) catch return error.Corrupted; // add little endian and not nice that we just catching
 
-    if (!mem.eql(u8, &header.version.magic, "RW")) return error.Corrupted;
-    if (header.version.major != 3) return error.InvalidVersion;
-    if (header.version.minor != 4) return error.InvalidVersion;
+    if (!mem.eql(u8, &head.version.magic, "RW")) return error.Corrupted;
+    if (head.version.major != 3) return error.InvalidVersion;
+    if (head.version.minor != 4) return error.InvalidVersion;
 
     return .{
         .allocator = allocator,
         .reader = reader,
         .seekable_stream = seekable_steam,
-        .entries_len = header.entries_len,
+        .entries_len = head.entries_len,
         .zstd = try compress.zstd.decompressor(allocator, reader, .{ .window_buffer = window_buffer }),
     };
 }

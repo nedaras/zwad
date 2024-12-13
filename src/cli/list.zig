@@ -8,93 +8,98 @@ const handled = @import("../handled.zig");
 const Options = @import("../cli.zig").Options;
 const fs = std.fs;
 const io = std.io;
-const Allocator = std.mem.Allocator;
 const HandleError = handled.HandleError;
 const is_windows = builtin.os.tag == .windows;
 
-//const stdin = std.io.getStdIn();
-
-//if (is_windows) {
-// idk
-//} else {
-//const tty = std.posix.isatty(stdin.handle);
-//std.debug.print("{}\n", .{tty});
-//}
-
-pub fn list(allocator: Allocator, options: Options) HandleError!void {
-    if (options.file == null) {
-        if (is_windows) @panic("not implemented on windows");
-
-        const stdin = io.getStdIn();
-        if (std.posix.isatty(stdin.handle)) {
-            std.debug.print("zwad: Refusing to read archive contents from terminal (missing -f option?)", .{});
-            return error.Fatal;
-        }
-
-        var br = io.bufferedReader(stdin.reader());
-        const reader = br.reader();
-
-        const iter = @import("../wad/header.zig").headerIterator(reader) catch |err| {
-            std.debug.print("{s}\n", .{@errorName(err)});
-            return error.Fatal;
-        };
-        std.debug.print("entry_len: {d}\n", .{iter.entries_len});
-
-        return;
-    }
-    //const src = options.file orelse @panic("not implemented, add -f option"); // we rly should start working on linux
-
-    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
-    defer file_map.deinit();
-
-    var fbs = io.fixedBufferStream(file_map.view);
-
-    var iter = wad.iterator(allocator, fbs.reader(), fbs.seekableStream(), undefined) catch |err| return switch (err) {
-        error.Corrupted => {
-            std.debug.print("zwad: This does not look like a wad archive\n", .{});
-            return error.Fatal;
-        },
-        error.InvalidVersion => error.Outdated,
-        else => |e| e,
-    };
-    defer iter.deinit();
-
+pub fn list(options: Options) HandleError!void {
     const stdout = std.io.getStdOut();
     var bw = io.bufferedWriter(stdout.writer());
 
     const writer = bw.writer();
 
-    // todo: add verbose option
-    if (options.hashes) |h| {
-        const hashes_map = try handled.map(fs.cwd(), h, .{});
-        defer hashes_map.deinit();
+    const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
+    defer if (hashes_map) |h| h.deinit();
 
-        // add magic to hashes file
-        const game_hashes = hashes.decompressor(hashes_map.view);
+    const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
-        while (iter.next() catch {
-            std.debug.print("zwad: This wad archive seems to be corrupted\n", .{});
+    if (options.file == null) {
+        if (is_windows) @panic("not implemented on windows");
+
+        const stdin = io.getStdIn();
+        if (std.posix.isatty(stdin.handle)) {
+            std.debug.print("zwad: Refusing to read archive contents from terminal (missing -f option?)\n", .{});
+            return error.Fatal;
+        }
+
+        var br = io.bufferedReader(stdin.reader());
+        var iter = wad.header.headerIterator(br.reader()) catch |err| return switch (err) {
+            error.InvalidFile, error.EndOfStream => {
+                std.debug.print("zwad: This does not look like a wad archive\n", .{});
+                return error.Fatal;
+            },
+            error.UnknownVersion => error.Outdated,
+            else => |e| {
+                std.debug.print("zwad: {s}\n", .{errors.stringify(e)});
+                return if (e == error.Unexpected) error.Unexpected else error.Fatal;
+            },
+        };
+
+        while (iter.next() catch |err| {
+            switch (err) {
+                error.InvalidFile => std.debug.print("zwad: This wad archive seems to be corrupted\n", .{}),
+                error.EndOfStream => std.debug.print("zwad: Unexpected EOF in archive\n", .{}),
+                else => |e| {
+                    std.debug.print("zwad: {s}\n", .{errors.stringify(e)});
+                    return if (e == error.Unexpected) error.Unexpected else error.Fatal;
+                },
+            }
             return error.Fatal;
         }) |entry| {
-            if (game_hashes.get(entry.hash) catch {
+            const path = if (game_hashes) |h| h.get(entry.hash) catch {
                 std.debug.print("zwad: This hashes file seems to be corrupted\n", .{});
                 return error.Fatal;
-            }) |path| {
-                writer.print("{s}\n", .{path}) catch return;
+            } else null;
+            if (path) |p| {
+                writer.print("{s}\n", .{p}) catch return;
                 continue;
             }
             writer.print("{x:0>16}\n", .{entry.hash}) catch return;
         }
-        bw.flush() catch return;
+
+        bw.flush() catch {};
+
         return;
     }
 
-    while (iter.next() catch {
-        std.debug.print("zwad: This wad archive seems to be corrupted\n", .{});
+    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
+    defer file_map.deinit();
+
+    var fbs = io.fixedBufferStream(file_map.view);
+    var iter = wad.header.headerIterator(fbs.reader()) catch |err| return switch (err) {
+        error.InvalidFile, error.EndOfStream => {
+            std.debug.print("zwad: This does not look like a wad archive\n", .{});
+            return error.Fatal;
+        },
+        error.UnknownVersion => error.Outdated,
+    };
+
+    while (iter.next() catch |err| {
+        switch (err) {
+            error.InvalidFile => std.debug.print("zwad: This wad archive seems to be corrupted\n", .{}),
+            error.EndOfStream => std.debug.print("zwad: Unexpected EOF in archive\n", .{}),
+        }
         return error.Fatal;
     }) |entry| {
+        const path = if (game_hashes) |h| h.get(entry.hash) catch {
+            std.debug.print("zwad: This hashes file seems to be corrupted\n", .{});
+            return error.Fatal;
+        } else null;
+        if (path) |p| {
+            writer.print("{s}\n", .{p}) catch return;
+            continue;
+        }
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
     }
 
-    bw.flush() catch return;
+    bw.flush() catch {};
 }
