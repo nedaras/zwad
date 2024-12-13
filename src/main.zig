@@ -4,6 +4,7 @@ const hashes = @import("hashes.zig");
 const compress = @import("compress.zig");
 const wad = @import("wad.zig");
 const cli = @import("cli.zig");
+const logger = @import("logger.zig");
 const handle = @import("handled.zig").handle;
 const HandleError = @import("handled.zig").HandleError;
 const fs = std.fs;

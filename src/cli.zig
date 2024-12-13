@@ -1,5 +1,6 @@
 const std = @import("std");
 const cli = @import("cli/options.zig");
+const logger = @import("logger.zig");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
@@ -72,7 +73,8 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
     var iter = try std.process.argsWithAllocator(allocator);
     errdefer iter.deinit();
 
-    _ = iter.next(); // skip cwd arg
+    // this does look cursed that we're initing it here
+    logger.init(std.fs.path.basename(iter.next().?));
 
     var args = Arguments{
         .allocator = allocator,

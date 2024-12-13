@@ -27,11 +27,12 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
         entries_len: u32,
         index: u32,
 
+        prev_hash: u64 = 0,
+
         const Self = @This();
 
         pub fn next(self: *Self) Error!?Entry {
             if (self.index == self.entries_len) return null;
-            defer self.index += 1;
 
             const gb = 1024 * 1024 * 1024;
             const entry: Entry = switch (self.version) {
@@ -82,9 +83,14 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
             };
 
+            if (self.prev_hash > entry.hash) return error.InvalidFile;
+
             if (entry.decompressed_len > 4 * gb) return error.InvalidFile;
             if (entry.compressed_len > 4 * gb) return error.InvalidFile;
             if (entry.offset > 4 * gb) return error.InvalidFile;
+
+            self.index += 1;
+            self.prev_hash = entry.hash;
 
             return entry;
         }
