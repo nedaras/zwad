@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const errors = @import("../errors.zig");
 const mapping = @import("../mapping.zig");
 const wad = @import("../wad.zig");
@@ -9,11 +10,41 @@ const fs = std.fs;
 const io = std.io;
 const Allocator = std.mem.Allocator;
 const HandleError = handled.HandleError;
+const is_windows = builtin.os.tag == .windows;
+
+//const stdin = std.io.getStdIn();
+
+//if (is_windows) {
+// idk
+//} else {
+//const tty = std.posix.isatty(stdin.handle);
+//std.debug.print("{}\n", .{tty});
+//}
 
 pub fn list(allocator: Allocator, options: Options) HandleError!void {
-    const src = options.file orelse @panic("not implemented, add -f option"); // we rly should start working on linux
+    if (options.file == null) {
+        if (is_windows) @panic("not implemented on windows");
 
-    const file_map = try handled.map(fs.cwd(), src, .{});
+        const stdin = io.getStdIn();
+        if (std.posix.isatty(stdin.handle)) {
+            std.debug.print("zwad: Refusing to read archive contents from terminal (missing -f option?)", .{});
+            return error.Fatal;
+        }
+
+        var br = io.bufferedReader(stdin.reader());
+        const reader = br.reader();
+
+        const iter = @import("../wad/header.zig").headerIterator(reader) catch |err| {
+            std.debug.print("{s}\n", .{@errorName(err)});
+            return error.Fatal;
+        };
+        std.debug.print("entry_len: {d}\n", .{iter.entries_len});
+
+        return;
+    }
+    //const src = options.file orelse @panic("not implemented, add -f option"); // we rly should start working on linux
+
+    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
     defer file_map.deinit();
 
     var fbs = io.fixedBufferStream(file_map.view);
