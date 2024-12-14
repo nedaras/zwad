@@ -1,13 +1,6 @@
 const std = @import("std");
-const toc = @import("./toc.zig");
-
-const Version = enum {
-    v1,
-    v2,
-    v3,
-    v3_3,
-    v3_4,
-};
+const toc = @import("toc.zig");
+const Version = @import("version.zig").Version;
 
 pub fn HeaderIterator(comptime ReaderType: type) type {
     return struct {

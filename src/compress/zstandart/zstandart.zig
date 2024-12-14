@@ -30,6 +30,7 @@ pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
 
 pub const DecompressStreamError = error{
     NoSpaceLeft,
+    MalformedFrame,
     MalformedBlock,
     Unexpected,
 };
@@ -38,6 +39,7 @@ pub fn decompressStream(stream: *DecompressStream, in: *InBuffer, out: *OutBuffe
     const res = zstd.ZSTD_decompressStream(stream, out, in);
     return switch (getErrorCode(res)) {
         .NO_ERROR => res,
+        .PREFIX_UNKNOWN => error.MalformedFrame,
         .CORRUPTION_DETECTED => error.MalformedBlock,
         .DST_SIZE_TOO_SMALL => error.NoSpaceLeft,
         else => |err| unexpectedError(err),

@@ -39,7 +39,8 @@ pub const zstd = struct {
                 self.* = undefined;
             }
 
-            pub const ReadError = ReaderType.Error || error{ // add MalformedFrame
+            pub const ReadError = ReaderType.Error || error{
+                MalformedFrame,
                 MalformedBlock,
                 Unexpected,
             };
@@ -123,6 +124,10 @@ pub const zstd = struct {
                 self.source = rd;
                 reset(self);
             }
+
+            //pub fn skipBytes(amt: usize) !void {
+
+            //}
 
             pub fn reset(self: *Self) void {
                 self.buffer.unread_index = 0;

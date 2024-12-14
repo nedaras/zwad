@@ -18,6 +18,7 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
 
     //const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
+    var window_buf: [1 << 17]u8 = undefined;
     if (options.file == null) {
         const stdin = io.getStdIn();
         if (std.posix.isatty(stdin.handle)) {
@@ -26,7 +27,7 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
         }
 
         var br = io.bufferedReader(stdin.reader());
-        var iter = wad.iterator(allocator, br.reader()) catch |err| {
+        var iter = wad.streamIterator(allocator, br.reader(), &window_buf) catch |err| {
             logger.println("{s}", .{@errorName(err)});
             return error.Fatal;
         };
@@ -35,9 +36,21 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
         while (iter.next() catch |err| {
             logger.println("{s}", .{@errorName(err)});
             return error.Fatal;
-        }) |offset| {
-            _ = offset;
-            //logger.println("{d}", .{offset});
+        }) |entry| {
+            const zstd_stream = entry.decompressor.zstd;
+
+            var amt: usize = 0;
+            while (entry.decompressed_len > amt) {
+                var buf: [4096]u8 = undefined;
+                const len = zstd_stream.readAll(&buf) catch |err| {
+                    logger.println("{s}", .{@errorName(err)});
+                    return error.Fatal;
+                };
+                amt += len;
+            }
+            if (entry.decompressed_len != amt) {
+                @panic("not same lens");
+            }
         }
 
         return;
