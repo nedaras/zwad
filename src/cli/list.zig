@@ -43,7 +43,20 @@ pub fn list(options: Options) HandleError!void {
             },
         };
 
-        while (iter.next() catch |err| {
+        while (iter.next()) |me| {
+            const entry = me orelse break;
+            const path = if (game_hashes) |h| h.get(entry.hash) catch {
+                logger.println("This hashes file seems to be corrupted", .{});
+                return error.Fatal;
+            } else null;
+
+            if (path) |p| {
+                writer.print("{s}\n", .{p}) catch return;
+                continue;
+            }
+
+            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
+        } else |err| {
             switch (err) {
                 error.InvalidFile => logger.println("This wad archive seems to be corrupted", .{}),
                 error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
@@ -53,16 +66,6 @@ pub fn list(options: Options) HandleError!void {
                 },
             }
             return error.Fatal;
-        }) |entry| {
-            const path = if (game_hashes) |h| h.get(entry.hash) catch {
-                logger.println("This hashes file seems to be corrupted", .{});
-                return error.Fatal;
-            } else null;
-            if (path) |p| {
-                writer.print("{s}\n", .{p}) catch return;
-                continue;
-            }
-            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
         }
 
         bw.flush() catch {};
@@ -82,13 +85,8 @@ pub fn list(options: Options) HandleError!void {
         error.UnknownVersion => error.Outdated,
     };
 
-    while (iter.next() catch |err| {
-        switch (err) {
-            error.InvalidFile => logger.println("This wad archive seems to be corrupted", .{}),
-            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-        }
-        return error.Fatal;
-    }) |entry| {
+    while (iter.next()) |me| {
+        const entry = me orelse break;
         const path = if (game_hashes) |h| h.get(entry.hash) catch {
             logger.println("This hashes file seems to be corrupted", .{});
             return error.Fatal;
@@ -98,6 +96,12 @@ pub fn list(options: Options) HandleError!void {
             continue;
         }
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
+    } else |err| {
+        switch (err) {
+            error.InvalidFile => logger.println("This wad archive seems to be corrupted", .{}),
+            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+        }
+        return error.Fatal;
     }
 
     bw.flush() catch {};
