@@ -128,6 +128,23 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 self.zstd = try zstd.decompressor(self.entries.allocator, self.reader.reader(), .{ .window_buffer = self.zstd_window_buffer });
             }
 
+            if (self.entries.items.len > 1) {
+                const n = self.entries.items[self.entries.items.len - 2];
+                if (entry.offset == n.offset) {
+                    // we need to find out if its going to be cached, if it is we will not allocate shit
+                    // TODO: check if curr type is same with prev type
+                    std.debug.print("there will be a duplicate\n", .{});
+                    if (n.type == .zstd or n.type == .zstd_multi) {
+                        if (n.compressed_len > self.zstd.?.unreadBytes()) {
+                            std.debug.print("duplication will not be cached\n", .{});
+                            // do smth
+                        }
+                    } else {
+                        std.debug.print("duplication will not be cached\n", .{});
+                    }
+                }
+            }
+
             return .{
                 .hash = entry.hash,
                 .compressed_len = entry.compressed_len,
