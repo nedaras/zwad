@@ -18,6 +18,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
             compressed_len: u32,
             decompressed_len: u32,
 
+            type: toc.EntryType,
+
             offset: u32,
         };
 
@@ -42,6 +44,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .type = entry.entry_type,
                         .offset = entry.offset,
                     };
                 },
@@ -51,6 +54,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .type = entry.entry_type,
                         .offset = entry.offset,
                     };
                 },
@@ -60,6 +64,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .type = entry.entry_type,
                         .offset = entry.offset,
                     };
                 },
@@ -69,6 +74,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .type = entry.entry_type,
                         .offset = entry.offset,
                     };
                 },
@@ -78,6 +84,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .type = entry.entry_type,
                         .offset = entry.offset,
                     };
                 },

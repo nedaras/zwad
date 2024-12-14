@@ -6,121 +6,75 @@ const assert = std.debug.assert;
 
 pub const header = @import("./wad/header.zig");
 
-const HeaderV3_4 = extern struct {
-    const Version = extern struct {
-        magic: [2]u8,
-        major: u8,
-        minor: u8,
-    };
-
-    version: Version,
-    ecdsa_signature: [256]u8,
-    checksum: u64 align(1),
-    entries_len: u32,
-};
-
-const EntryType = enum(u4) {
-    raw,
-    link,
-    gzip,
-    zstd,
-    zstd_multi,
-};
-
-const EntryV3_4 = packed struct {
-    hash: u64,
-    offset: u32,
-    compressed_len: u32,
-    decompressed_len: u32,
-    entry_type: EntryType,
-    subchunk_len: u4,
-    subchunk: u24,
-    checksum: u64,
-};
-
-pub fn Iterator(comptime ReaderType: type, comptime SeekableStreamType: type) type {
+pub fn Iterator(comptime ReaderType: type) type {
     return struct {
-        allocator: Allocator,
+        pub const HeaderIterator = header.HeaderIterator(ReaderType);
+        pub const Error = HeaderIterator.Error;
 
-        reader: ReaderType,
-        seekable_stream: SeekableStreamType,
+        const Entries = std.ArrayList(HeaderIterator.Entry);
 
-        entries_len: u32,
-        index: u32 = 0,
-
-        zstd: compress.zstd.Decompressor(ReaderType),
-
-        pub const Entry = struct {
-            hash: u64,
-            compressed_len: u32,
-            decompressed_len: u32,
-
-            decompressor: union(enum) {
-                none: ReaderType,
-                zstd: compress.zstd.Decompressor(ReaderType).Reader,
-            },
-        };
+        inner: HeaderIterator,
+        entries: Entries,
 
         const Self = @This();
 
-        pub fn deinit(self: *Self) void {
-            self.zstd.deinit();
+        pub fn init(allocator: Allocator, reader: ReaderType) (error{ OutOfMemory, UnknownVersion } || Error)!Self {
+            const iter = try header.headerIterator(reader);
+            return .{
+                .inner = iter,
+                .entries = try Entries.initCapacity(allocator, iter.entries_len),
+            };
         }
 
-        pub fn next(self: *Self) !?Entry {
-            if (self.entries_len > self.index) {
-                defer self.index += 1;
+        pub fn deinit(self: *Self) void {
+            self.entries.deinit();
+            self.* = undefined;
+        }
 
-                try self.seekable_stream.seekTo(@sizeOf(HeaderV3_4) + @sizeOf(EntryV3_4) * self.index);
-                const entry: EntryV3_4 = try self.reader.readStruct(EntryV3_4); // add little endian
-                const gb = 1024 * 1024 * 1024;
+        pub fn next(self: *Self) Error!?u32 {
+            // for streaming!
+            //  * read the iner iterator first nd build a sorted array (by offset)
+            //  * then when we have all data in mem we can just stream it, and know what corresponds to what
 
-                assert(4 * gb > entry.compressed_len);
-                assert(4 * gb > entry.decompressed_len);
-                assert(4 * gb > entry.offset);
-
-                try self.seekable_stream.seekTo(entry.offset);
-
-                if (entry.entry_type == .zstd or entry.entry_type == .zstd_multi) {
-                    self.zstd.reset();
-                }
-
-                return .{
-                    .hash = entry.hash,
-                    .compressed_len = entry.compressed_len,
-                    .decompressed_len = entry.decompressed_len,
-                    .decompressor = switch (entry.entry_type) {
-                        .raw => .{ .none = self.reader },
-                        .link => @panic("link"),
-                        .gzip => @panic("gzip"),
-                        .zstd, .zstd_multi => .{ .zstd = self.zstd.reader() },
-                    },
-                };
+            if (self.inner.index == 0) {
+                try buildEntries(self);
             }
-            return null;
+
+            assert(self.inner.index == self.inner.entries_len);
+
+            if (self.entries.items.len == 0) {
+                return null;
+            }
+
+            const entry = self.entries.getLast();
+            self.entries.items.len -= 1;
+
+            if (self.entries.getLastOrNull()) |e| {
+                if (entry.offset == e.offset) {
+                    std.debug.print("duplicate!!\n", .{});
+                }
+            }
+
+            return entry.offset;
+        }
+
+        fn buildEntries(self: *Self) Error!void {
+            while (try self.inner.next()) |entry| {
+                const item = self.entries.addOneAssumeCapacity();
+                item.* = entry;
+            }
+
+            const Context = struct {
+                fn lessThan(_: @This(), a: HeaderIterator.Entry, b: HeaderIterator.Entry) bool {
+                    return a.offset > b.offset;
+                }
+            };
+            // we should do in place sort
+            std.sort.block(HeaderIterator.Entry, self.entries.items, Context{}, Context.lessThan);
         }
     };
 }
 
-pub const IteratorError = error{
-    Corrupted,
-    InvalidVersion,
-    OutOfMemory,
-    Unexpected,
-};
-
-pub fn iterator(allocator: Allocator, reader: anytype, seekable_steam: anytype, window_buffer: []u8) IteratorError!Iterator(@TypeOf(reader), @TypeOf(seekable_steam)) {
-    const head: HeaderV3_4 = reader.readStruct(HeaderV3_4) catch return error.Corrupted; // add little endian and not nice that we just catching
-
-    if (!mem.eql(u8, &head.version.magic, "RW")) return error.Corrupted;
-    if (head.version.major != 3) return error.InvalidVersion;
-    if (head.version.minor != 4) return error.InvalidVersion;
-
-    return .{
-        .allocator = allocator,
-        .reader = reader,
-        .seekable_stream = seekable_steam,
-        .entries_len = head.entries_len,
-        .zstd = try compress.zstd.decompressor(allocator, reader, .{ .window_buffer = window_buffer }),
-    };
+pub fn iterator(allocator: Allocator, reader: anytype) !Iterator(@TypeOf(reader)) {
+    return Iterator(@TypeOf(reader)).init(allocator, reader);
 }

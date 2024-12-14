@@ -10,7 +10,6 @@ const logger = @import("../logger.zig");
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
-const is_windows = builtin.os.tag == .windows;
 
 //  there has to be a better way to handle these errors, it so dumb that i have the same functions, but one handles more errors
 pub fn list(options: Options) HandleError!void {

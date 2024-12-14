@@ -7,6 +7,7 @@ const assert = std.debug.assert;
 
 pub const help = @embedFile("cli/messages/help.cli");
 pub const list = @import("cli/list.zig").list;
+pub const extract = @import("cli/extract.zig").extract;
 
 pub const Diagnostics = struct {
     allocator: Allocator,
