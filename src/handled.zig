@@ -1,6 +1,7 @@
 const std = @import("std");
-const errors = @import("./errors.zig");
-const mapping = @import("./mapping.zig");
+const errors = @import("errors.zig");
+const mapping = @import("mapping.zig");
+const logger = @import("logger.zig");
 const fs = std.fs;
 const File = fs.File;
 const Dir = fs.Dir;
@@ -21,10 +22,10 @@ pub fn handle(v: anytype) @typeInfo(@TypeOf(v)).ErrorUnion.payload {
         const exit_code: u8 = if (err == error.Fatal or err == error.OutOfMemory or err == error.Unexpected) 1 else 0;
         switch (err) {
             error.Usage => std.debug.print(@embedFile("./cli/messages/usage.cli"), .{}),
-            error.Fatal => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
             error.Outdated => std.debug.print(@embedFile("./cli/messages/fatal.cli"), .{}),
-            error.OutOfMemory => std.debug.print(@embedFile("./cli/messages/oof.cli"), .{}),
-            error.Unexpected => std.debug.print(@embedFile("./cli/messages/unexpected.cli"), .{}),
+            error.Fatal => logger.print(@embedFile("./cli/messages/fatal.cli"), .{}),
+            error.OutOfMemory => logger.print(@embedFile("./cli/messages/oof.cli"), .{}),
+            error.Unexpected => logger.print(@embedFile("./cli/messages/unexpected.cli"), .{}),
             error.Exit => {},
         }
         std.process.exit(exit_code);
@@ -70,7 +71,7 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
     };
 
     const file = dir.openFile(sub_path, open_flags) catch |err| {
-        std.debug.print("zwad: {s}: Cannot open: {s}\n", .{ sub_path, errors.stringify(err) });
+        logger.println("{s}: Cannot open: {s}", .{ sub_path, errors.stringify(err) });
         return if (err == error.Unexpected) error.Unexpected else error.Fatal;
     };
 
@@ -81,7 +82,7 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
             else => |e| errors.stringify(e),
         };
 
-        std.debug.print("zwad: {s}: Cannot map: {s}\n", .{ sub_path, msg });
+        logger.println("{s}: Cannot map: {s}", .{ sub_path, msg });
         return if (err == error.Unexpected) error.Unexpected else error.Fatal;
     };
 

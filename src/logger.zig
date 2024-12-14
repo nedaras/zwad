@@ -14,10 +14,28 @@ pub fn println(comptime fmt: []const u8, args: anytype) void {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
 
-    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+    var bw = std.io.BufferedWriter(256, std.fs.File.Writer){
+        .unbuffered_writer = std.io.getStdOut().writer(),
+    };
 
     bw.writer().writeAll(prefix.?) catch return;
     bw.writer().print(": " ++ fmt ++ "\n", args) catch return;
+
+    bw.flush() catch return;
+}
+
+pub fn print(comptime fmt: []const u8, args: anytype) void {
+    assert(prefix != null);
+
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
+
+    var bw = std.io.BufferedWriter(256, std.fs.File.Writer){
+        .unbuffered_writer = std.io.getStdOut().writer(),
+    };
+
+    bw.writer().writeAll(prefix.?) catch return;
+    bw.writer().print(": " ++ fmt, args) catch return;
 
     bw.flush() catch return;
 }

@@ -194,19 +194,19 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
                     std.debug.print(cli.help, .{});
                     return error.Exit;
                 }
-                std.debug.print("zwad: unrecognized option '{s}{s}'\n", .{ if (err.option.len == 1) "-" else "--", err.option });
+                logger.println("unrecognized option '{s}{s}'", .{ if (err.option.len == 1) "-" else "--", err.option });
             },
             .unexpected_argument => |err| {
-                std.debug.print("zwad: option '--{s}' doesn't allow an argument\n", .{err.option});
+                logger.println("zwad: option '--{s}' doesn't allow an argument", .{err.option});
             },
             .empty_argument => |err| {
-                std.debug.print("zwad: option '{s}{s}' requires an argument\n", .{ if (err.option.len == 1) "-" else "--", err.option });
+                logger.println("zwad: option '{s}{s}' requires an argument", .{ if (err.option.len == 1) "-" else "--", err.option });
             },
             .missing_operation => {
-                std.debug.print("zwad: You must specify one of the '-ctx' options\n", .{});
+                logger.println("zwad: You must specify one of the '-ctx' options", .{});
             },
             .multiple_operations => {
-                std.debug.print("zwad: You may not specify more than one '-ctx' option\n", .{});
+                logger.println("zwad: You may not specify more than one '-ctx' option", .{});
             },
         }
         return error.Usage;
