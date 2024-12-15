@@ -25,6 +25,9 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         zstd: ?zstd.Decompressor(Reader) = null,
         zstd_window_buffer: []u8,
 
+        duplicate: []u8 = &[_]u8{},
+        recover: bool = false,
+
         pub const Entry = struct {
             hash: u64,
             compressed_len: u32,
@@ -51,6 +54,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            self.entries.allocator.free(self.duplicate);
             self.entries.deinit();
             if (self.zstd) |*z| {
                 z.deinit();
@@ -59,6 +63,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             self.* = undefined;
         }
 
+        // when adding gzip i will prob kms
         pub fn next(self: *Self) !?Entry {
             if (self.inner.index == 0) {
                 try buildEntries(self);
@@ -90,13 +95,19 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 if (self.zstd) |*z| {
                     const cached_len = z.buffer.unread_index;
                     if (entry.compressed_len > cached_len) {
-                        @panic("duplication cant be handled, not cached");
+                        std.debug.print("duplicate not cached?\n", .{});
+                        return .{
+                            .hash = entry.hash,
+                            .compressed_len = entry.compressed_len,
+                            .decompressed_len = entry.decompressed_len,
+                            .decompressor = .{ .zstd = self.zstd.?.reader() },
+                        };
                     }
+
+                    std.debug.print("duplicate again?\n", .{});
 
                     z.buffer.unread_index -= entry.compressed_len;
                     z.buffer.unread_len += entry.compressed_len;
-
-                    std.debug.print("handling dupe\n", .{});
 
                     return .{
                         .hash = entry.hash,
@@ -106,6 +117,13 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                     };
                 } else unreachable;
                 // duplicate
+            }
+
+            if (self.recover) {
+                self.zstd.?.buffer.data = self.zstd_window_buffer;
+                self.zstd.?.buffer.unread_index = 0;
+                self.zstd.?.buffer.unread_len = 0;
+                self.recover = false;
             }
 
             var skip = entry.offset - bytes_handled; // we need to understand what we're skipping
@@ -136,11 +154,29 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                     std.debug.print("there will be a duplicate\n", .{});
                     if (n.type == .zstd or n.type == .zstd_multi) {
                         if (n.compressed_len > self.zstd.?.unreadBytes()) {
-                            std.debug.print("duplication will not be cached\n", .{});
-                            // do smth
+                            std.debug.print("allocating cuz  duplicates\n", .{});
+                            const slice = try self.entries.allocator.alloc(u8, n.compressed_len);
+                            const fill = self.zstd.?.unreadBytes();
+
+                            @memcpy(slice[0..fill], self.zstd.?.buffer.data[self.zstd.?.buffer.unread_index .. self.zstd.?.buffer.unread_index + fill]);
+                            const amt = try self.reader.reader().readAll(slice[fill..]);
+
+                            if (amt != slice[fill..].len) {
+                                return error.EndOfStream;
+                            }
+
+                            self.recover = true;
+
+                            self.zstd.?.buffer.data = slice;
+
+                            self.zstd.?.buffer.unread_index = 0;
+                            self.zstd.?.buffer.unread_len = slice.len;
+
+                            self.entries.allocator.free(self.duplicate);
+                            self.duplicate = slice;
                         }
                     } else {
-                        std.debug.print("duplication will not be cached\n", .{});
+                        @panic("no");
                     }
                 }
             }
