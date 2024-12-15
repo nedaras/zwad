@@ -37,19 +37,25 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
             logger.println("{s}", .{@errorName(err)});
             return error.Fatal;
         }) |entry| {
-            const zstd_stream = entry.decompressor.zstd;
-
-            var amt: usize = 0;
-            while (entry.decompressed_len > amt) {
-                var buf: [4096]u8 = undefined;
-                const len = zstd_stream.readAll(&buf) catch |err| {
-                    logger.println("{s}", .{@errorName(err)});
-                    return error.Fatal;
-                };
-                amt += len;
-            }
-            if (entry.decompressed_len != amt) {
-                @panic("not same lens");
+            switch (entry.decompressor) {
+                .zstd => |zstd_stream| {
+                    var amt: usize = 0;
+                    while (entry.decompressed_len > amt) {
+                        var buf: [4096]u8 = undefined;
+                        const len = zstd_stream.readAll(&buf) catch |err| {
+                            logger.println("{s}", .{@errorName(err)});
+                            return error.Fatal;
+                        };
+                        amt += len;
+                    }
+                    if (entry.decompressed_len != amt) {
+                        @panic("not same lens");
+                    }
+                },
+                .none => |stream| {
+                    std.debug.print("RAWWW\n", .{});
+                    stream.skipBytes(entry.compressed_len, .{}) catch unreachable;
+                },
             }
         }
 

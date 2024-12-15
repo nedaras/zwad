@@ -2,7 +2,6 @@ const std = @import("std");
 const compress = @import("compress.zig");
 const version = @import("wad/version.zig");
 const mem = std.mem;
-const zstd = compress.zstd;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
@@ -15,18 +14,18 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         pub const HeaderIterator = header.HeaderIterator(ReaderType);
         pub const Error = HeaderIterator.Error;
 
-        const Entries = std.ArrayList(HeaderIterator.Entry);
+        const Entries = std.ArrayListUnmanaged(HeaderIterator.Entry);
 
+        allocator: Allocator,
         reader: std.io.CountingReader(ReaderType),
 
         inner: HeaderIterator,
         entries: Entries,
 
-        zstd: ?zstd.Decompressor(Reader) = null,
+        zstd: ?compress.zstd.Decompressor(Reader) = null,
         zstd_window_buffer: []u8,
 
-        duplicate: []u8 = &[_]u8{},
-        recover: bool = false,
+        duplication_buffer: []u8 = &[_]u8{},
 
         pub const Entry = struct {
             hash: u64,
@@ -35,7 +34,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
             decompressor: union(enum) {
                 none: Reader,
-                zstd: zstd.Decompressor(Reader).Reader,
+                zstd: compress.zstd.Decompressor(Reader).Reader,
             },
 
             // add read_func
@@ -46,6 +45,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         pub fn init(allocator: Allocator, reader: ReaderType, window_buf: []u8) (error{ OutOfMemory, UnknownVersion } || Error)!Self {
             const iter = try header.headerIterator(reader);
             return .{
+                .allocator = allocator,
                 .reader = std.io.countingReader(reader),
                 .inner = iter,
                 .entries = try Entries.initCapacity(allocator, iter.entries_len),
@@ -54,16 +54,15 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.entries.allocator.free(self.duplicate);
-            self.entries.deinit();
-            if (self.zstd) |*z| {
-                z.deinit();
+            self.allocator.free(self.duplication_buffer);
+            self.entries.deinit(self.allocator);
+            if (self.zstd) |*zstd| {
+                zstd.deinit();
             }
 
             self.* = undefined;
         }
 
-        // when adding gzip i will prob kms
         pub fn next(self: *Self) !?Entry {
             if (self.inner.index == 0) {
                 try buildEntries(self);
@@ -87,27 +86,38 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             const entry = self.entries.getLast();
             defer self.entries.items.len -= 1;
 
-            const bytes_handled = self.reader.bytes_read - (if (self.zstd) |z| z.unreadBytes() else 0);
-            if (bytes_handled > entry.offset) {
-                if (entry.type != .zstd and entry.type != .zstd_multi) {
-                    @panic("duplication cant be handled, not zstd");
-                }
-                if (self.zstd) |*z| {
-                    const cached_len = z.buffer.unread_index;
-                    if (entry.compressed_len > cached_len) {
-                        std.debug.print("duplicate not cached?\n", .{});
-                        return .{
-                            .hash = entry.hash,
-                            .compressed_len = entry.compressed_len,
-                            .decompressed_len = entry.decompressed_len,
-                            .decompressor = .{ .zstd = self.zstd.?.reader() },
-                        };
+            // when we will implement gzip we will need to update its unread bytes to same as zstd
+            // and make them work together
+
+            if ((entry.type == .zstd or entry.type == .zstd_multi) and self.zstd == null) {
+                self.zstd = try compress.zstd.decompressor(self.allocator, self.reader.reader(), .{
+                    .window_buffer = self.zstd_window_buffer,
+                });
+            }
+
+            switch (entry.type) {
+                .zstd, .zstd_multi => {
+                    if (self.zstd == null) {
+                        self.zstd = try compress.zstd.decompressor(self.allocator, self.reader.reader(), .{
+                            .window_buffer = self.zstd_window_buffer,
+                        });
                     }
+                },
+                else => @panic("not zstd"),
+            }
 
-                    std.debug.print("duplicate again?\n", .{});
+            if (self.zstd) |*zstd| { // should be more like if zstd stream on use
+                const bytes_handled = self.reader.bytes_read - zstd.unreadBytes();
+                if (bytes_handled > entry.offset) {
+                    // TODO: assert that prev  compressed and decompressed lens are the same and types are the same
 
-                    z.buffer.unread_index -= entry.compressed_len;
-                    z.buffer.unread_len += entry.compressed_len;
+                    // we will go back in time
+                    assert(zstd.buffer.unread_index >= entry.compressed_len);
+
+                    zstd.buffer.unread_index -= entry.compressed_len; // prob some overflow problems make so 2 -= 3 would be 0
+                    zstd.buffer.unread_len += entry.compressed_len;
+
+                    std.debug.print("duplicate handled\n", .{});
 
                     return .{
                         .hash = entry.hash,
@@ -115,83 +125,63 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                         .decompressed_len = entry.decompressed_len,
                         .decompressor = .{ .zstd = self.zstd.?.reader() },
                     };
-                } else unreachable;
-                // duplicate
-            }
+                }
 
-            if (self.recover) {
-                self.zstd.?.buffer.data = self.zstd_window_buffer;
-                self.zstd.?.buffer.unread_index = 0;
-                self.zstd.?.buffer.unread_len = 0;
-                self.recover = false;
-            }
-
-            var skip = entry.offset - bytes_handled; // we need to understand what we're skipping
-            if (self.zstd) |*z| {
-                if (z.unreadBytes() > skip) {
-                    z.buffer.unread_index += skip;
-                    z.buffer.unread_len -= skip;
-                    skip = 0;
+                const skip = entry.offset - bytes_handled; // we need to know what we're skipping here
+                if (zstd.unreadBytes() >= skip) {
+                    zstd.buffer.unread_index += skip;
+                    zstd.buffer.unread_len -= skip;
                 } else {
-                    const amt = z.buffer.unread_len - z.buffer.unread_index;
-                    z.buffer.unread_index = z.buffer.unread_len;
-                    skip -= amt;
+                    zstd.buffer.unread_index = 0;
+                    zstd.buffer.unread_len = 0;
+
+                    try self.reader.reader().skipBytes(skip - zstd.unreadBytes(), .{});
                 }
-            }
-            try self.reader.reader().skipBytes(skip, .{});
 
-            std.debug.print("nread: {d}, hash: {x}, offset: {d}, compressed_len: {d}\n", .{ self.reader.bytes_read, entry.hash, entry.offset, entry.compressed_len });
+                if (peek(self)) |next_entry| blk: {
+                    if (entry.offset != next_entry.offset) break :blk;
+                    std.debug.print("handling duplicates\n", .{});
+                    // TODO: assert them types and sizes
+                    if (zstd.unreadBytes() >= next_entry.compressed_len) break :blk; // it will be cached
 
-            if ((entry.type == .zstd or entry.type == .zstd_multi) and self.zstd == null) {
-                self.zstd = try zstd.decompressor(self.entries.allocator, self.reader.reader(), .{ .window_buffer = self.zstd_window_buffer });
-            }
+                    const cached_bytes = zstd.unreadBytes();
+                    const missing_bytes = next_entry.compressed_len - cached_bytes;
 
-            if (self.entries.items.len > 1) {
-                const n = self.entries.items[self.entries.items.len - 2];
-                if (entry.offset == n.offset) {
-                    // we need to find out if its going to be cached, if it is we will not allocate shit
-                    // TODO: check if curr type is same with prev type
-                    std.debug.print("there will be a duplicate\n", .{});
-                    if (n.type == .zstd or n.type == .zstd_multi) {
-                        if (n.compressed_len > self.zstd.?.unreadBytes()) {
-                            std.debug.print("allocating cuz  duplicates\n", .{});
-                            const slice = try self.entries.allocator.alloc(u8, n.compressed_len);
-                            const fill = self.zstd.?.unreadBytes();
+                    const cached_slice = zstd.buffer.data[zstd.buffer.unread_index .. zstd.buffer.unread_index + cached_bytes];
 
-                            @memcpy(slice[0..fill], self.zstd.?.buffer.data[self.zstd.?.buffer.unread_index .. self.zstd.?.buffer.unread_index + fill]);
-                            const amt = try self.reader.reader().readAll(slice[fill..]);
+                    if (zstd.buffer.data.len >= next_entry.compressed_len) {
+                        std.debug.print("flushing window buffer\n", .{});
 
-                            if (amt != slice[fill..].len) {
-                                return error.EndOfStream;
-                            }
+                        mem.copyForwards(u8, zstd.buffer.data[0..cached_bytes], cached_slice);
+                        const amt = try self.reader.reader().readAll(zstd.buffer.data[cached_bytes .. cached_bytes + missing_bytes]);
 
-                            self.recover = true;
+                        if (amt != missing_bytes) return error.EndOfStream;
 
-                            self.zstd.?.buffer.data = slice;
+                        zstd.buffer.unread_index = 0;
+                        zstd.buffer.unread_len = next_entry.compressed_len;
 
-                            self.zstd.?.buffer.unread_index = 0;
-                            self.zstd.?.buffer.unread_len = slice.len;
-
-                            self.entries.allocator.free(self.duplicate);
-                            self.duplicate = slice;
-                        }
-                    } else {
-                        @panic("no");
+                        break :blk;
                     }
+                    @panic("create dupe buffer\n");
+                    // need to create dupplication buffer
                 }
+
+                return .{
+                    .hash = entry.hash,
+                    .compressed_len = entry.compressed_len,
+                    .decompressed_len = entry.decompressed_len,
+                    .decompressor = .{ .zstd = self.zstd.?.reader() },
+                };
             }
 
-            return .{
-                .hash = entry.hash,
-                .compressed_len = entry.compressed_len,
-                .decompressed_len = entry.decompressed_len,
-                .decompressor = switch (entry.type) {
-                    .raw => @panic("raw"),
-                    .link => @panic("link"),
-                    .gzip => @panic("gzip"),
-                    .zstd, .zstd_multi => .{ .zstd = self.zstd.?.reader() },
-                },
-            };
+            @panic("end");
+        }
+
+        fn peek(self: *Self) ?HeaderIterator.Entry {
+            if (self.entries.items.len > 1) {
+                return self.entries.items[self.entries.items.len - 2];
+            }
+            return null;
         }
 
         fn buildEntries(self: *Self) Error!void {
