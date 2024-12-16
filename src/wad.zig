@@ -89,12 +89,6 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             // when we will implement gzip we will need to update its unread bytes to same as zstd
             // and make them work together
 
-            if ((entry.type == .zstd or entry.type == .zstd_multi) and self.zstd == null) {
-                self.zstd = try compress.zstd.decompressor(self.allocator, self.reader.reader(), .{
-                    .window_buffer = self.zstd_window_buffer,
-                });
-            }
-
             switch (entry.type) {
                 .zstd, .zstd_multi => {
                     if (self.zstd == null) {
@@ -106,18 +100,16 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 else => @panic("not zstd"),
             }
 
-            if (self.zstd) |*zstd| { // should be more like if zstd stream on use
+            if (self.zstd) |*zstd| { // should be more like if zstd stream on use, we could do like if prev entry was zstd
                 const bytes_handled = self.reader.bytes_read - zstd.unreadBytes();
                 if (bytes_handled > entry.offset) {
                     // TODO: assert that prev  compressed and decompressed lens are the same and types are the same
 
-                    // we will go back in time
                     assert(zstd.buffer.unread_index >= entry.compressed_len);
 
+                    // we will go back
                     zstd.buffer.unread_index -= entry.compressed_len; // prob some overflow problems make so 2 -= 3 would be 0
                     zstd.buffer.unread_len += entry.compressed_len;
-
-                    std.debug.print("duplicate handled\n", .{});
 
                     return .{
                         .hash = entry.hash,
@@ -132,15 +124,14 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                     zstd.buffer.unread_index += skip;
                     zstd.buffer.unread_len -= skip;
                 } else {
+                    try self.reader.reader().skipBytes(skip - zstd.unreadBytes(), .{});
+
                     zstd.buffer.unread_index = 0;
                     zstd.buffer.unread_len = 0;
-
-                    try self.reader.reader().skipBytes(skip - zstd.unreadBytes(), .{});
                 }
 
                 if (peek(self)) |next_entry| blk: {
                     if (entry.offset != next_entry.offset) break :blk;
-                    std.debug.print("handling duplicates\n", .{});
                     // TODO: assert them types and sizes
                     if (zstd.unreadBytes() >= next_entry.compressed_len) break :blk; // it will be cached
 
@@ -150,8 +141,6 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                     const cached_slice = zstd.buffer.data[zstd.buffer.unread_index .. zstd.buffer.unread_index + cached_bytes];
 
                     if (zstd.buffer.data.len >= next_entry.compressed_len) {
-                        std.debug.print("flushing window buffer\n", .{});
-
                         mem.copyForwards(u8, zstd.buffer.data[0..cached_bytes], cached_slice);
                         const amt = try self.reader.reader().readAll(zstd.buffer.data[cached_bytes .. cached_bytes + missing_bytes]);
 
@@ -162,8 +151,22 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
                         break :blk;
                     }
-                    @panic("create dupe buffer\n");
-                    // need to create dupplication buffer
+
+                    assert(next_entry.compressed_len > self.duplication_buffer.len);
+
+                    const tmp = try self.allocator.alloc(u8, next_entry.compressed_len);
+                    @memcpy(tmp[0..cached_bytes], cached_slice);
+
+                    self.allocator.free(self.duplication_buffer);
+                    self.duplication_buffer = tmp;
+
+                    const amt = try self.reader.reader().readAll(self.duplication_buffer[cached_bytes..]);
+                    if (amt != missing_bytes) return error.EndOfStream;
+
+                    zstd.buffer.data = self.duplication_buffer;
+
+                    zstd.buffer.unread_index = 0;
+                    zstd.buffer.unread_len = next_entry.compressed_len;
                 }
 
                 return .{

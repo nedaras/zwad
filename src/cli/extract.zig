@@ -18,7 +18,7 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
 
     //const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
-    var window_buf: [1 << 17]u8 = undefined;
+    var window_buf: [1 << 17]u8 = undefined; // 17
     if (options.file == null) {
         const stdin = io.getStdIn();
         if (std.posix.isatty(stdin.handle)) {
