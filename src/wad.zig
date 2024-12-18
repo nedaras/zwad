@@ -2,6 +2,7 @@ const std = @import("std");
 const compress = @import("compress.zig");
 const version = @import("wad/version.zig");
 const mem = std.mem;
+const io = std.io;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
@@ -23,72 +24,71 @@ pub fn StreamIterator(comptime ReaderType: type) type {
         inner: HeaderIterator,
         entries: Entries,
 
-        zstd: ?compress.zstd.Decompressor(Reader) = null,
+        zstd: ?compress.zstd.Decompressor(ParentReader) = null,
         zstd_window_buffer: []u8,
 
         duplication_buffer: ?[]u8,
 
+        unread_file_bytes: u32 = 0,
+
         pub const IterateError = HeaderIterator.Error;
-        pub const Reader = std.io.CountingReader(ReaderType).Reader;
 
         pub const HeaderIterator = header.HeaderIterator(ReaderType);
+        pub const ParentReader = io.CountingReader(ReaderType).Reader;
 
-        pub const Entry = struct { // idea is simple pass in Entry(ReaderType) as its main reader and handle cached data its own way
+        pub const Entry = struct {
             hash: u64,
             compressed_len: u32,
             decompressed_len: u32,
-            type: EntryType,
-            duplicate: bool,
 
-            handled_len: usize,
-            handle: *Self,
+            decompressor: ?union(enum) {
+                none: ParentReader,
+                zstd: compress.zstd.Decompressor(ParentReader).Reader,
+            },
 
-            pub const Error = error{EndOfStream} || compress.zstd.Decompressor(ReaderType).Error;
+            unread_bytes: *u32,
+            cached_buf: []u8,
 
-            pub fn read(entry: Entry, buffer: []u8) Error!usize { // todo: assert if trying to read duplicate on invalid options
-                if (entry.duplicate) @panic("reading from duplicate when option `handle_duplicates` is set to false");
-                if (buffer.len == 0) return 0;
+            pub const Error = compress.zstd.Decompressor(io.CountingReader(ReaderType).Reader).Error;
+            pub const Reader = io.Reader(Entry, Error, read);
 
-                var dest = buffer;
-                if (std.debug.runtime_safety) { // this performs rly badly, cuz cache cant do stuff when we jumping in memory like that
-                    // this is dumb we have handled_len
-                    const bh = entry.handle.reader.bytes_read - if (entry.handle.zstd) |zstd| zstd.unreadBytes() else 0;
-                    const end = entry.handled_len + entry.compressed_len;
+            pub fn read(entry: Entry, buf: []u8) Error!usize { // return zero on ends
+                std.debug.print("unread_bytes: {d}\n", .{entry.unread_bytes.*});
+                if (entry.decompressor == null) @panic("reading from duplicate when option `handle_duplicates` is set to false");
+                const dest = buf[0..@min(buf.len, entry.unread_bytes.*)];
+                assert(entry.unread_bytes.* > 0);
 
-                    if (bh == end) return error.EndOfStream;
+                var amt: usize = 0;
+                // todo: we need to modify the chaced buffer here
+                switch (entry.decompressor.?) {
+                    .none => |stream| {
+                        const read_bytes = entry.compressed_len - entry.unread_bytes.*;
+                        if (entry.cached_buf.len > read_bytes) {
+                            const cached_slice = entry.cached_buf[read_bytes..];
+                            const copy_len = @min(cached_slice.len, dest.len);
 
-                    const len = end - bh;
-                    dest.len = @min(len, buffer.len);
-                }
-
-                return switch (entry.type) {
-                    .raw => {
-                        if (entry.handle.zstd == null) {
-                            return entry.handle.reader.read(buffer);
+                            if (dest.len - copy_len > 0) {
+                                amt += try stream.read(dest[copy_len..]);
+                            }
+                            // doing copy after, cuz it feels better not to change buffer when erroring
+                            @memcpy(dest[0..copy_len], cached_slice[0..copy_len]);
+                            amt += copy_len;
+                        } else {
+                            amt += try stream.read(dest);
                         }
-
-                        const zstd = entry.handle.zstd.?;
-
-                        const cached_slice = zstd.buffer.data[zstd.buffer.unread_index .. zstd.buffer.unread_index + zstd.buffer.unread_len];
-                        const copy_len = @min(cached_slice.len, dest.len);
-
-                        @memcpy(buffer[0..copy_len], cached_slice[0..copy_len]);
-
-                        if (copy_len == cached_slice.len) {
-                            entry.handle.zstd.?.buffer.unread_index = 0;
-                            entry.handle.zstd.?.buffer.unread_len = 0;
-
-                            return copy_len + try entry.handle.reader.read(dest[copy_len..]);
-                        }
-
-                        entry.handle.zstd.?.buffer.unread_index += copy_len;
-                        entry.handle.zstd.?.buffer.unread_len -= copy_len;
-
-                        return copy_len;
                     },
-                    .zstd, .zstd_multi => entry.handle.zstd.?.read(dest), // should we handle multi?, by just reading again on zero,
-                    .gzip, .link => @panic("not implemented"),
-                };
+                    .zstd => |zstd_stream| amt += try zstd_stream.read(dest),
+                }
+                entry.unread_bytes.* -= @intCast(amt); // problam we're having is that they're compressed and this line just makes no sence
+                return amt;
+            }
+
+            pub fn duplicate(entry: Entry) bool {
+                return entry.decompressor == null;
+            }
+
+            pub fn reader(entry: Entry) Reader {
+                return .{ .context = entry };
             }
         };
 
@@ -142,11 +142,29 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 return null;
             }
 
+            //if (self.zstd != null and prev(self) != null) {
+            //const prev_entry = prev(self).?;
+            //const read_bytes = prev_entry.compressed_len - self.unread_file_bytes;
+
+            //const skip = @min(self.zstd.?.unreadBytes(), read_bytes);
+
+            //self.zstd.?.buffer.unread_index += skip;
+            //self.zstd.?.buffer.unread_len -= skip;
+
+            //if (self.unread_file_bytes > skip) {
+            //try self.reader.reader().skipBytes(self.unread_file_bytes - skip, .{});
+            //}
+
+            //self.unread_file_bytes = 0;
+            //} else if (self.unread_file_bytes > 0) {
+            //try self.reader.reader().skipBytes(self.unread_file_bytes, .{});
+            //self.unread_file_bytes = 0;
+            //}
+
             const entry = self.entries.getLast();
             defer self.entries.items.len -= 1;
 
-            // skip bytes and handle duplicates
-
+            // prob initing zstd inside init function would be better and more efficent
             if (self.zstd == null and (entry.type == .zstd or entry.type == .zstd_multi)) {
                 self.zstd = try compress.zstd.decompressor(self.allocator, self.reader.reader(), .{
                     .window_buffer = self.zstd_window_buffer,
@@ -155,7 +173,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
             const bytes_handled = self.reader.bytes_read - if (self.zstd) |zstd| zstd.unreadBytes() else 0;
             if (bytes_handled > entry.offset) { //dupplicate, todo: handle asserts with errors and mb it can be that the user just overread some data
-                //std.debug.print("dupe, read: {d}, handled: {d}, offset: {d}, type: {s}\n", .{ self.reader.bytes_read, bytes_handled, entry.offset, @tagName(entry.type) });
+                std.debug.print("dupe, read: {d}, handled: {d}, offset: {d}, type: {s}\n", .{ self.reader.bytes_read, bytes_handled, entry.offset, @tagName(entry.type) });
                 assert(self.entries.capacity > self.entries.items.len);
                 const prev_entry = self.entries.allocatedSlice()[self.entries.items.len];
                 assert(entry.type == prev_entry.type);
@@ -163,20 +181,21 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 assert(entry.compressed_len == prev_entry.compressed_len);
                 assert(entry.decompressed_len == prev_entry.decompressed_len);
 
+                self.unread_file_bytes = entry.compressed_len;
+                const cached_buf = if (self.zstd) |zstd| zstd.buffer.data[zstd.buffer.unread_index .. zstd.buffer.unread_index + zstd.buffer.unread_len] else unreachable;
                 return .{
                     .hash = entry.hash,
                     .compressed_len = entry.compressed_len,
                     .decompressed_len = entry.decompressed_len,
-                    .type = entry.type,
-                    .duplicate = true,
-                    .handled_len = bytes_handled,
-                    .handle = self,
+                    .decompressor = null,
+                    .unread_bytes = &self.unread_file_bytes,
+                    .cached_buf = cached_buf,
                 };
             }
 
-            // what are we even skipping here?
+            // what are we even skipping here, is it some kinf of padding? probs.
             var skip = entry.offset - bytes_handled;
-            //std.debug.print("before, read: {d}, handled: {d}, offset: {d}, skip: {d}, type: {s}\n", .{ self.reader.bytes_read, bytes_handled, entry.offset, skip, @tagName(entry.type) });
+            std.debug.print("before, read: {d}, handled: {d}, offset: {d}, skip: {d}, type: {s}\n", .{ self.reader.bytes_read, bytes_handled, entry.offset, skip, @tagName(entry.type) });
             if (self.zstd) |*zstd| {
                 if (zstd.unreadBytes() >= skip) {
                     zstd.buffer.unread_index += skip;
@@ -197,15 +216,20 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
             self.zstd.?.completed = false;
             const bh = self.reader.bytes_read - if (self.zstd) |zstd| zstd.unreadBytes() else 0;
-            //std.debug.print("after, read: {d}, handled: {d}, offset: {d}, skip: {d}, type: {s}\n", .{ self.reader.bytes_read, bh, entry.offset, skip, @tagName(entry.type) });
+            std.debug.print("after, read: {d}, handled: {d}, offset: {d}, skip: {d}, type: {s}\n", .{ self.reader.bytes_read, bh, entry.offset, skip, @tagName(entry.type) });
+            self.unread_file_bytes = entry.compressed_len;
+            const cached_buf = if (self.zstd) |zstd| zstd.buffer.data[zstd.buffer.unread_index .. zstd.buffer.unread_index + zstd.buffer.unread_len] else unreachable;
             return .{
                 .hash = entry.hash,
                 .compressed_len = entry.compressed_len,
                 .decompressed_len = entry.decompressed_len,
-                .type = entry.type,
-                .duplicate = false,
-                .handled_len = bh,
-                .handle = self,
+                .decompressor = switch (entry.type) {
+                    .raw => .{ .none = self.reader.reader() },
+                    .zstd, .zstd_multi => .{ .zstd = self.zstd.?.reader() },
+                    else => @panic("not implemented"),
+                },
+                .unread_bytes = &self.unread_file_bytes,
+                .cached_buf = cached_buf,
             };
             //  below is code we should implement in the future
 
@@ -310,9 +334,16 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             //unreachable;
         }
 
-        fn peek(self: *Self) ?HeaderIterator.Entry {
+        fn peek(self: *const Self) ?HeaderIterator.Entry {
             if (self.entries.items.len > 1) {
                 return self.entries.items[self.entries.items.len - 2];
+            }
+            return null;
+        }
+
+        fn prev(self: *const Self) ?HeaderIterator.Entry {
+            if (self.entries.capacity > self.entries.items.len) {
+                return self.entries.allocatedSlice()[self.entries.items.len];
             }
             return null;
         }

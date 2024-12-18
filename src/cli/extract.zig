@@ -23,7 +23,7 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
 
     const writer = bw.writer();
 
-    var window_buf: [1 << 17]u8 = undefined; // 17
+    var window_buf: [1 << 17]u8 = undefined;
     if (options.file == null) {
         const stdin = io.getStdIn();
         if (std.posix.isatty(stdin.handle)) {
@@ -41,21 +41,19 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
         };
         defer iter.deinit();
 
-        while (iter.next() catch |err| {
-            logger.println("{s}", .{@errorName(err)});
-            return error.Fatal;
-        }) |entry| {
-            if (entry.duplicate) {
-                _ = writer;
-                //writer.print("{x} -duplicate\n", .{entry.hash}) catch return;
+        while (iter.next()) |mb| {
+            const entry = mb orelse break;
+            if (entry.duplicate()) {
+                std.debug.print("{x} {d} -duplicate\n", .{ entry.hash, entry.compressed_len });
                 continue;
             }
-            //writer.print("{x}\n", .{entry.hash}) catch return;
+            _ = writer;
+            std.debug.print("{x} {d}\n", .{ entry.hash, entry.compressed_len });
 
             var amt: usize = 0;
             while (entry.decompressed_len > amt) {
                 var buf: [4096]u8 = undefined;
-                const len = entry.read(buf[0..@min(buf.len, entry.decompressed_len - amt)]) catch |err| {
+                const len = entry.read(&buf) catch |err| {
                     logger.println("{s}", .{@errorName(err)});
                     return error.Fatal;
                 };
@@ -64,10 +62,14 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
             if (entry.decompressed_len != amt) {
                 @panic("not same lens");
             }
+        } else |err| {
+            logger.println("{s}", .{@errorName(err)});
+            return error.Fatal;
         }
         bw.flush() catch return;
         return;
     }
     @panic("not implemented");
+    // when reading for mmap file, we should read it from steam iter, unless if multithreading is used
     // mb would be nice to, like err if reading stdin after extraction is not empty
 }
