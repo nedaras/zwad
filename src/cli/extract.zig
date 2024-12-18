@@ -18,6 +18,11 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
 
     //const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
+    const stdout = std.io.getStdOut();
+    var bw = io.bufferedWriter(stdout.writer());
+
+    const writer = bw.writer();
+
     var window_buf: [1 << 17]u8 = undefined; // 17
     if (options.file == null) {
         const stdin = io.getStdIn();
@@ -27,7 +32,10 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
         }
 
         var br = io.bufferedReader(stdin.reader());
-        var iter = wad.streamIterator(allocator, br.reader(), &window_buf) catch |err| {
+        var iter = wad.streamIterator(allocator, br.reader(), .{
+            .handle_duplicates = false,
+            .window_buffer = &window_buf,
+        }) catch |err| {
             logger.println("{s}", .{@errorName(err)});
             return error.Fatal;
         };
@@ -37,29 +45,29 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
             logger.println("{s}", .{@errorName(err)});
             return error.Fatal;
         }) |entry| {
-            switch (entry.decompressor) {
-                .zstd => |zstd_stream| {
-                    var amt: usize = 0;
-                    while (entry.decompressed_len > amt) {
-                        var buf: [4096]u8 = undefined;
-                        const len = zstd_stream.readAll(&buf) catch |err| {
-                            logger.println("{s}", .{@errorName(err)});
-                            return error.Fatal;
-                        };
-                        amt += len;
-                    }
-                    if (entry.decompressed_len != amt) {
-                        @panic("not same lens");
-                    }
-                },
-                .none => |stream| {
-                    std.debug.print("RAWWW\n", .{});
-                    stream.skipBytes(entry.compressed_len, .{}) catch unreachable;
-                },
+            if (entry.duplicate) {
+                _ = writer;
+                //writer.print("{x} -duplicate\n", .{entry.hash}) catch return;
+                continue;
+            }
+            //writer.print("{x}\n", .{entry.hash}) catch return;
+
+            var amt: usize = 0;
+            while (entry.decompressed_len > amt) {
+                var buf: [4096]u8 = undefined;
+                const len = entry.read(buf[0..@min(buf.len, entry.decompressed_len - amt)]) catch |err| {
+                    logger.println("{s}", .{@errorName(err)});
+                    return error.Fatal;
+                };
+                amt += len;
+            }
+            if (entry.decompressed_len != amt) {
+                @panic("not same lens");
             }
         }
-
+        bw.flush() catch return;
         return;
     }
     @panic("not implemented");
+    // mb would be nice to, like err if reading stdin after extraction is not empty
 }

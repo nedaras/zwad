@@ -39,15 +39,15 @@ pub const zstd = struct {
                 self.* = undefined;
             }
 
-            pub const ReadError = ReaderType.Error || error{
+            pub const Error = ReaderType.Error || error{
                 MalformedFrame,
                 MalformedBlock,
                 Unexpected,
             };
 
-            pub const Reader = io.Reader(*Self, ReadError, read);
+            pub const Reader = io.Reader(*Self, Error, read);
 
-            pub fn read(self: *Self, buffer: []u8) ReadError!usize {
+            pub fn read(self: *Self, buffer: []u8) Error!usize {
                 if (buffer.len == 0) return 0;
                 if (self.completed) {
                     self.completed = false;
