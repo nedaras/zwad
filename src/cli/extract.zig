@@ -23,6 +23,9 @@ pub fn extract(allocator: Allocator, options: Options) !void {
 
     const writer = bw.writer();
 
+    var out_dir = try fs.cwd().makeOpenPath("out", .{});
+    defer out_dir.close();
+
     var window_buf: [1 << 17]u8 = undefined;
     if (options.file == null) {
         const stdin = io.getStdIn();
@@ -42,12 +45,20 @@ pub fn extract(allocator: Allocator, options: Options) !void {
             if (entry.duplicate()) {
                 continue;
             }
-            _ = writer;
+
+            writer.print("{x}.dds", .{entry.hash}) catch return;
+
+            var buf: [256]u8 = undefined;
+            const file_name = try std.fmt.bufPrint(&buf, "{x}.dds\n", .{entry.hash});
+            const out_file = try out_dir.createFile(file_name, .{ .read = true });
+            defer out_file.close();
+
+            const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = entry.decompressed_len });
+            defer map.unmap();
 
             var amt: usize = 0;
             while (entry.decompressed_len > amt) { // fix this stuff
-                var buf: [4096]u8 = undefined;
-                const len = try entry.read(&buf);
+                const len = try entry.read(map.view[amt..]);
                 amt += len;
             }
             if (entry.decompressed_len != amt) {
@@ -60,7 +71,45 @@ pub fn extract(allocator: Allocator, options: Options) !void {
 
         return;
     }
-    @panic("not implemented");
+
+    const file = try fs.cwd().openFile(options.file.?, .{ .mode = .read_only });
+    defer file.close();
+
+    var br = io.bufferedReader(file.reader());
+    var iter = try wad.streamIterator(allocator, br.reader(), .{
+        .handle_duplicates = false,
+        .window_buffer = &window_buf,
+    });
+    defer iter.deinit();
+
+    while (try iter.next()) |entry| {
+        if (entry.duplicate()) {
+            continue;
+        }
+
+        writer.print("{x}.dds\n", .{entry.hash}) catch return;
+
+        var buf: [256]u8 = undefined;
+        const file_name = try std.fmt.bufPrint(&buf, "{x}.dds", .{entry.hash});
+        const out_file = try out_dir.createFile(file_name, .{ .read = true });
+        defer out_file.close();
+
+        const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = entry.decompressed_len });
+        defer map.unmap();
+
+        var amt: usize = 0;
+        while (entry.decompressed_len > amt) { // fix this stuff
+            const len = try entry.read(map.view[amt..]);
+            amt += len;
+        }
+        if (entry.decompressed_len != amt) {
+            std.debug.print("len: {d} ", .{amt});
+            @panic("not same lens");
+        }
+    }
+
+    bw.flush() catch return;
+
     // when reading for mmap file, we should read it from steam iter, unless if multithreading is used
     // mb would be nice to, like err if reading stdin after extraction is not empty
 }
