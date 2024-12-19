@@ -110,7 +110,7 @@ pub fn main() !void {
     if (true) {
         return switch (args.operation) {
             .list => handle(cli.list(args.options)),
-            .extract => handle(cli.extract(allocator, args.options)),
+            .extract => try cli.extract(allocator, args.options),
         };
     }
 
