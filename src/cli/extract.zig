@@ -12,7 +12,7 @@ const io = std.io;
 const HandleError = handled.HandleError;
 const Allocator = std.mem.Allocator;
 
-pub fn extract(allocator: Allocator, options: Options) HandleError!void {
+pub fn extract(allocator: Allocator, options: Options) !void {
     const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
     defer if (hashes_map) |h| h.deinit();
 
@@ -23,7 +23,7 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
 
     const writer = bw.writer();
 
-    var window_buf: [1 << 17]u8 = undefined; // 17
+    var window_buf: [1 << 17]u8 = undefined;
     if (options.file == null) {
         const stdin = io.getStdIn();
         if (std.posix.isatty(stdin.handle)) {
@@ -32,42 +32,35 @@ pub fn extract(allocator: Allocator, options: Options) HandleError!void {
         }
 
         var br = io.bufferedReader(stdin.reader());
-        var iter = wad.streamIterator(allocator, br.reader(), .{
+        var iter = try wad.streamIterator(allocator, br.reader(), .{
             .handle_duplicates = false,
             .window_buffer = &window_buf,
-        }) catch |err| {
-            logger.println("{s}", .{@errorName(err)});
-            return error.Fatal;
-        };
+        });
         defer iter.deinit();
 
-        while (iter.next() catch |err| {
-            logger.println("{s}", .{@errorName(err)});
-            return error.Fatal;
-        }) |entry| {
-            if (entry.duplicate) {
-                _ = writer;
-                //writer.print("{x} -duplicate\n", .{entry.hash}) catch return;
+        while (try iter.next()) |entry| {
+            if (entry.duplicate()) {
                 continue;
             }
-            //writer.print("{x}\n", .{entry.hash}) catch return;
+            _ = writer;
 
             var amt: usize = 0;
-            while (entry.decompressed_len > amt) {
+            while (entry.decompressed_len > amt) { // fix this stuff
                 var buf: [4096]u8 = undefined;
-                const len = entry.read(buf[0..@min(buf.len, entry.decompressed_len - amt)]) catch |err| {
-                    logger.println("{s}", .{@errorName(err)});
-                    return error.Fatal;
-                };
+                const len = try entry.read(&buf);
                 amt += len;
             }
             if (entry.decompressed_len != amt) {
+                std.debug.print("len: {d} ", .{amt});
                 @panic("not same lens");
             }
         }
+
         bw.flush() catch return;
+
         return;
     }
     @panic("not implemented");
+    // when reading for mmap file, we should read it from steam iter, unless if multithreading is used
     // mb would be nice to, like err if reading stdin after extraction is not empty
 }

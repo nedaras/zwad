@@ -4,6 +4,12 @@ const io = std.io;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+pub const WindowBuffer = struct {
+    data: []u8,
+    unread_index: usize = 0,
+    unread_len: usize = 0,
+};
+
 pub const zstd = struct {
     pub const DecompressorOptions = struct {
         window_buffer: []u8,
@@ -15,12 +21,6 @@ pub const zstd = struct {
             handle: *zstandart.DecompressStream,
             buffer: WindowBuffer,
             completed: bool = false,
-
-            const WindowBuffer = struct {
-                data: []u8,
-                unread_index: usize = 0,
-                unread_len: usize = 0,
-            };
 
             const Self = @This();
 
