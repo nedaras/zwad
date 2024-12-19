@@ -46,25 +46,26 @@ pub fn extract(allocator: Allocator, options: Options) !void {
                 continue;
             }
 
-            writer.print("{x}.dds", .{entry.hash}) catch return;
+            writer.print("{x}.txt\n", .{entry.hash}) catch return;
 
             var buf: [256]u8 = undefined;
-            const file_name = try std.fmt.bufPrint(&buf, "{x}.dds\n", .{entry.hash});
+            const file_name = try std.fmt.bufPrint(&buf, "{x}.txt", .{entry.hash});
+
             const out_file = try out_dir.createFile(file_name, .{ .read = true });
             defer out_file.close();
 
-            const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = entry.decompressed_len });
-            defer map.unmap();
+            try out_file.setEndPos(file_name.len + 1);
 
-            var amt: usize = 0;
-            while (entry.decompressed_len > amt) { // fix this stuff
-                const len = try entry.read(map.view[amt..]);
-                amt += len;
-            }
-            if (entry.decompressed_len != amt) {
-                std.debug.print("len: {d} ", .{amt});
-                @panic("not same lens");
-            }
+            //const map = try mapping.mapFile(out_file, .{ .mode = .read_write, .size = file_name.len });
+            //defer map.unmap();
+            const map = try std.posix.mmap(null, file_name.len + 1, std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, out_file.handle, 0);
+            defer std.posix.munmap(map);
+
+            @memcpy(map[0 .. map.len - 1], file_name);
+            map[file_name.len] = '\n';
+
+            try std.posix.msync(map, std.posix.MSF.SYNC);
+            return error.Freeze;
         }
 
         bw.flush() catch return;
@@ -91,21 +92,24 @@ pub fn extract(allocator: Allocator, options: Options) !void {
 
         var buf: [256]u8 = undefined;
         const file_name = try std.fmt.bufPrint(&buf, "{x}.dds", .{entry.hash});
+
         const out_file = try out_dir.createFile(file_name, .{ .read = true });
         defer out_file.close();
 
-        const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = entry.decompressed_len });
+        const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = file_name.len });
         defer map.unmap();
 
-        var amt: usize = 0;
-        while (entry.decompressed_len > amt) { // fix this stuff
-            const len = try entry.read(map.view[amt..]);
-            amt += len;
-        }
-        if (entry.decompressed_len != amt) {
-            std.debug.print("len: {d} ", .{amt});
-            @panic("not same lens");
-        }
+        @memcpy(map.view, file_name);
+
+        //var amt: usize = 0;
+        //while (entry.decompressed_len > amt) { // fix this stuff
+        //const len = try entry.read(map.view[amt..]);
+        //amt += len;
+        //}
+        //if (entry.decompressed_len != amt) {
+        //std.debug.print("len: {d} ", .{amt});
+        //@panic("not same lens");
+        //}
     }
 
     bw.flush() catch return;
