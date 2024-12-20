@@ -46,7 +46,8 @@ pub fn extract(allocator: Allocator, options: Options) !void {
                 continue;
             }
 
-            writer.print("{x}.txt\n", .{entry.hash}) catch return;
+            // mmapping on linux seems to be rly fucking slow
+            std.debug.print("{x}.txt\n", .{entry.hash});
 
             var buf: [256]u8 = undefined;
             const file_name = try std.fmt.bufPrint(&buf, "{x}.txt", .{entry.hash});
@@ -54,18 +55,27 @@ pub fn extract(allocator: Allocator, options: Options) !void {
             const out_file = try out_dir.createFile(file_name, .{ .read = true });
             defer out_file.close();
 
-            try out_file.setEndPos(file_name.len + 1);
+            var amt: usize = 0;
+            var write_buf: [16 * 1024]u8 = undefined;
+            while (true) {
+                amt += try entry.read(&write_buf);
+                if (amt == 0) break;
+                try out_file.writeAll(write_buf[0..amt]);
+            }
+
+            std.debug.assert(amt == entry.decompressed_len);
+
+            //try out_file.setEndPos(file_name.len + 1);
 
             //const map = try mapping.mapFile(out_file, .{ .mode = .read_write, .size = file_name.len });
             //defer map.unmap();
-            const map = try std.posix.mmap(null, file_name.len + 1, std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, out_file.handle, 0);
-            defer std.posix.munmap(map);
+            //const map = try std.posix.mmap(null, file_name.len + 1, std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, out_file.handle, 0);
+            //defer std.posix.munmap(map);
 
-            @memcpy(map[0 .. map.len - 1], file_name);
-            map[file_name.len] = '\n';
+            //@memcpy(map[0 .. map.len - 1], file_name);
+            //map[file_name.len] = '\n';
 
-            try std.posix.msync(map, std.posix.MSF.SYNC);
-            return error.Freeze;
+            //try std.posix.msync(map, std.posix.MSF.SYNC);
         }
 
         bw.flush() catch return;
@@ -83,33 +93,30 @@ pub fn extract(allocator: Allocator, options: Options) !void {
     });
     defer iter.deinit();
 
+    var prev_path_buf: [256]u8 = undefined;
+    var prev_path: []u8 = &prev_path_buf;
+
     while (try iter.next()) |entry| {
-        if (entry.duplicate()) {
-            continue;
-        }
+        var buf: [256]u8 = undefined;
+        const file_name = try std.fmt.bufPrint(&buf, "{x}.dds", .{entry.hash});
 
         writer.print("{x}.dds\n", .{entry.hash}) catch return;
 
-        var buf: [256]u8 = undefined;
-        const file_name = try std.fmt.bufPrint(&buf, "{x}.dds", .{entry.hash});
+        if (entry.duplicate()) {
+            try out_dir.copyFile(prev_path, out_dir, file_name, .{});
+            continue;
+        }
+
+        prev_path.len = file_name.len;
+        @memcpy(prev_path, file_name);
 
         const out_file = try out_dir.createFile(file_name, .{ .read = true });
         defer out_file.close();
 
-        const map = try mapping.mapFile(out_file, .{ .mode = .write_only, .size = file_name.len });
-        defer map.unmap();
+        const mmap = try mapping.mapFileW(out_file, .{ .mode = .write_only, .size = entry.decompressed_len });
+        defer mmap.unmap();
 
-        @memcpy(map.view, file_name);
-
-        //var amt: usize = 0;
-        //while (entry.decompressed_len > amt) { // fix this stuff
-        //const len = try entry.read(map.view[amt..]);
-        //amt += len;
-        //}
-        //if (entry.decompressed_len != amt) {
-        //std.debug.print("len: {d} ", .{amt});
-        //@panic("not same lens");
-        //}
+        try entry.reader().readNoEof(mmap.view);
     }
 
     bw.flush() catch return;

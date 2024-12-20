@@ -58,6 +58,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
                 var input_amt: u32 = 0;
                 var output_amt: u32 = 0;
+                var flag = false;
 
                 const cached_bytes = entry.cache.unread_len;
                 switch (entry.decompressor.?) {
@@ -83,8 +84,11 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                         }
                     },
                     .zstd => |zstd_stream| {
-                        // if there is smth in cache first thing it will do is handle the cache
-                        output_amt += @intCast(try zstd_stream.read(dest)); // handle multi data
+                        const amt: u32 = @intCast(try zstd_stream.read(dest));
+
+                        output_amt += amt;
+                        flag = amt == 0;
+
                         if (cached_bytes == 0) {
                             input_amt += @intCast(entry.cache.unread_index);
                         } else input_amt += @intCast(cached_bytes - entry.cache.unread_len);
@@ -93,6 +97,10 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
                 entry.unread_bytes.* -= input_amt;
                 entry.available_bytes.* -= output_amt;
+
+                if (flag and entry.unread_bytes.* > 0) {
+                    return read(entry, buffer);
+                }
 
                 return output_amt;
             }
