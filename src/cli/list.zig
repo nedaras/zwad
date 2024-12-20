@@ -58,7 +58,7 @@ pub fn list(options: Options) HandleError!void {
             writer.print("{x:0>16}\n", .{entry.hash}) catch return;
         } else |err| {
             switch (err) {
-                error.InvalidFile => logger.println("This wad archive seems to be corrupted", .{}),
+                error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
                 error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
                 else => |e| {
                     logger.println("{s}", .{errors.stringify(e)});
@@ -98,7 +98,7 @@ pub fn list(options: Options) HandleError!void {
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
     } else |err| {
         switch (err) {
-            error.InvalidFile => logger.println("This wad archive seems to be corrupted", .{}),
+            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
         }
         return error.Fatal;

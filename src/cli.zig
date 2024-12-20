@@ -40,6 +40,7 @@ pub const Action = enum {
 pub const Options = struct {
     file: ?[]const u8,
     hashes: ?[]const u8,
+    verbose: bool,
 };
 
 pub const Arguments = struct {
@@ -84,6 +85,7 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
         .options = .{
             .file = null,
             .hashes = null,
+            .verbose = false,
         },
     };
 
@@ -188,6 +190,9 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) ParseArgument
                 } else {
                     args.options.hashes = val;
                 }
+            },
+            .verbose => {
+                args.options.verbose = true;
             },
             .unknown => {
                 if (options.diagnostics) |diagnostics| {

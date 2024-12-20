@@ -7,6 +7,7 @@ pub const Option = union(enum) {
     list: ?[]const u8,
     file: ?[]const u8,
     hashes: ?[]const u8,
+    verbose,
     unknown,
 };
 
@@ -40,6 +41,7 @@ pub const OptionIterator = struct {
             'x' => .{ .extract = null },
             'f' => .{ .file = null },
             'h' => .{ .hashes = null },
+            'v' => .verbose,
             else => .unknown,
         };
     }
@@ -65,5 +67,6 @@ fn getOptionFromName(slice: []const u8) Option {
     if (mem.eql(u8, key, "get")) return .{ .extract = val };
     if (mem.eql(u8, key, "file")) return .{ .file = val };
     if (mem.eql(u8, key, "hashes")) return .{ .hashes = val };
+    if (mem.eql(u8, key, "verbose")) return .verbose;
     return .unknown;
 }

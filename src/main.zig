@@ -215,22 +215,6 @@ fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
     return args;
 }
 
-const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
-
-pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
-    return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
-        error.FileNotFound => {
-            if (fs.path.dirname(sub_path)) |sub_dir| {
-                @setCold(false);
-                try dir.makePath(sub_dir);
-                return dir.createFile(sub_path, .{ .read = true });
-            }
-            return error.FileNotFound;
-        },
-        else => |e| return e,
-    };
-}
-
 fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but idk if its needed
     var result: T = 0;
 
