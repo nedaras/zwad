@@ -7,6 +7,7 @@ const hashes = @import("../hashes.zig");
 const handled = @import("../handled.zig");
 const Options = @import("../cli.zig").Options;
 const logger = @import("../logger.zig");
+const magic = @import("../magic.zig");
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
@@ -113,61 +114,65 @@ pub fn extract(allocator: Allocator, options: Options) !void {
             writer.print("{s}\n", .{path.?}) catch return;
         }
 
-        // todo: handle write File errors here
-        writeFile(out_dir, path.?, entry.reader(), entry.decompressed_len) catch |err| switch (err) {
-            error.Fatal => {},
-            else => |e| return e,
+        if (writeFile(path.?, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |err| switch (err) {
+            .make => |e| logger.println("{s}: Cannot make: {s}", .{ path.?, @errorName(e) }),
+            .map => |e| logger.println("{s}: Cannot map: {s}", .{ path.?, @errorName(e) }),
+            .read => |e| logger.println("{s}: Cannot read: {s}", .{ path.?, @errorName(e) }),
         };
     }
 
     bw.flush() catch return;
 }
 
-fn writeFile(dir: fs.Dir, sub_path: []const u8, reader: anytype, max_size: u32) HandleError!void {
+const WriteOptions = struct {
+    dir: ?fs.Dir = null,
+    size: u32,
+};
+
+fn DiagnosticsError(comptime ReaderType: type) type {
+    return union(enum) {
+        make: MakeFileError,
+        map: error{
+            AccessDenied,
+            IsDir,
+            SystemResources,
+            SharingViolation,
+            ProcessFdQuotaExceeded,
+            SystemFdQuotaExceeded,
+            NoSpaceLeft,
+            Unexpected,
+        },
+        read: (error{EndOfStream} || ReaderType.Error),
+    };
+}
+
+fn writeFile(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
     if (is_windows) {
-        return writeFileW(dir, sub_path, reader, max_size);
+        return writeFileW(sub_path, reader, options);
     }
     @compileError("not implemented for linux");
 }
 
-fn writeFileW(dir: fs.Dir, sub_path: []const u8, reader: anytype, size: u32) HandleError!void {
+fn writeFileW(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
     // on windows mapping files is much faster then buffered writting
-
-    const file = makeFile(dir, sub_path) catch |err| switch (err) {
-        error.DiskQuota, error.LinkQuotaExceeded, error.ReadOnlyFileSystem => @panic("unwraping"),
-        else => |e| {
-            logger.println("{s}: Cannot create: {s}", .{ sub_path, errors.stringify(e) });
-            return if (e == error.Unexpected) error.Unexpected else error.Fatal;
-        },
-    };
+    const file = makeFile(options.dir orelse fs.cwd(), sub_path) catch |err| return .{ .make = err };
     defer file.close();
 
-    if (size == 0) {
+    if (options.size == 0) {
         @setCold(true);
-        return;
+        return null;
     }
 
-    const map = mapping.mapFileW(file, .{ .mode = .write_only, .size = size }) catch |err| switch (err) {
+    const map = mapping.mapFileW(file, .{ .mode = .write_only, .size = options.size }) catch |err| return switch (err) {
         error.LockedMemoryLimitExceeded => unreachable, // no lock requested
         error.InvalidSize => unreachable, // size will not be zero
-        else => |e| {
-            logger.println("{s}: Cannot map: {s}", .{ sub_path, errors.stringify(e) });
-            return if (e == error.Unexpected) error.Unexpected else error.Fatal;
-        },
+        else => |e| .{ .map = e },
     };
     defer map.unmap();
 
-    reader.readNoEof(map.view) catch |err| switch (err) {
-        error.EndOfStream => unreachable,
-        error.Unexpected => {
-            logger.println("Unexpected error has occured while extracting this archive", .{});
-            return error.Fatal;
-        },
-        error.MalformedFrame, error.MalformedBlock => {
-            logger.println("This archive seems to be corrupted", .{});
-            return error.Fatal;
-        },
-    };
+    reader.readNoEof(map.view) catch |err| return .{ .read = err };
+
+    return null;
 }
 
 const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
