@@ -7,6 +7,8 @@ const cli = @import("cli.zig");
 const logger = @import("logger.zig");
 const handle = @import("handled.zig").handle;
 const HandleError = @import("handled.zig").HandleError;
+pub const list = @import("list.zig").list;
+pub const extract = @import("extract.zig").extract;
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -107,71 +109,10 @@ pub fn main() !void {
     var args = handle(handleArguments(allocator));
     defer args.deinit();
 
-    if (true) {
-        return switch (args.operation) {
-            .list => handle(cli.list(args.options)),
-            .extract => try cli.extract(allocator, args.options),
-        };
-    }
-
-    //const src = null orelse return error.ArgumentSrcFileMissing;
-    //const dst = null orelse return error.ArgumentDstDirMissing;
-
-    //var out_dir = try fs.cwd().makeOpenPath(dst, .{});
-    //defer out_dir.close();
-
-    //const hashes_file = try fs.cwd().openFile(".hashes", .{});
-    //defer hashes_file.close();
-
-    //const hashes_mapping = try mapping.mapFile(hashes_file, .{});
-    //defer hashes_mapping.unmap();
-
-    //const game_hashes = hashes.decompressor(hashes_mapping.view);
-
-    //const file = try fs.cwd().openFile(src, .{});
-    //defer file.close();
-
-    //const file_mapping = try mapping.mapFile(file, .{});
-    //defer file_mapping.unmap();
-
-    //var file_stream = io.fixedBufferStream(file_mapping.view);
-
-    //var window_buf: [1 << 17]u8 = undefined;
-    //var iter = try wad.iterator(allocator, file_stream.reader(), file_stream.seekableStream(), &window_buf);
-    //defer iter.deinit();
-
-    // add multithreading
-    //while (try iter.next()) |entry| {
-    //const path = game_hashes.get(entry.hash).?;
-    //const out_file = makeFile(out_dir, path) catch |err| switch (err) {
-    //error.BadPathName => {
-    //std.debug.print("_invalid: {s}\n", .{path});
-    //continue;
-    //},
-    //else => |e| return e,
-    //};
-    //defer out_file.close();
-
-    //const out_maping = try mapping.mapFile(out_file, .{
-    //.mode = .write_only,
-    //.size = entry.decompressed_len,
-    //});
-    //defer out_maping.unmap();
-
-    //switch (entry.decompressor) {
-    //.none => |stream| {
-    //assert(try stream.readAll(out_maping.view) == entry.decompressed_len);
-    //},
-    //.zstd => |zstd_stream| {
-    //var idx: usize = 0;
-    //while (entry.decompressed_len > idx) { // cuz if we hit zstd_multi we will have multiple blocks
-    //const amt = try zstd_stream.readAll(out_maping.view[idx..]);
-    //idx += amt;
-    //}
-    //assert(idx == entry.decompressed_len);
-    //},
-    //}
-    //}
+    return switch (args.operation) {
+        .list => handle(list(args.options)),
+        .extract => try extract(allocator, args.options),
+    };
 }
 
 fn handleArguments(allocator: mem.Allocator) HandleError!cli.Arguments {
