@@ -32,6 +32,9 @@ pub const Error = error{
     NotOpenForReading,
     OperationAborted,
     BrokenPipe,
+    DiskQuota,
+    LinkQuotaExceeded,
+    ReadOnlyFileSystem,
     Unexpected,
 };
 
@@ -63,6 +66,7 @@ pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors
         error.ConnectionTimedOut => "Connection timed out",
         error.SocketNotConnected => "Transport endpoint is not connected",
         error.NotOpenForReading, error.BrokenPipe => "File descriptor in bad state",
+        error.DiskQuota, error.LinkQuotaExceeded, error.ReadOnlyFileSystem => @panic("unwrap"),
         error.Unexpected => "Unknown error",
     };
 }

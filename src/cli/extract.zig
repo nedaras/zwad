@@ -50,7 +50,7 @@ pub fn extract(allocator: Allocator, options: Options) !void {
                 continue;
             }
 
-            // mmapping on linux seems to be rly fucking slow
+            // mmapping on linux seems to be rly fucking sloe
             std.debug.print("{x}.txt\n", .{entry.hash});
 
             var buf: [256]u8 = undefined;
@@ -99,26 +99,94 @@ pub fn extract(allocator: Allocator, options: Options) !void {
     });
     defer iter.deinit();
 
+    var path_buf: [21]u8 = undefined;
+    var path: []const u8 = undefined;
+
     while (try iter.next()) |entry| {
         if (entry.duplicate()) {
+            var new_path_buf: [21]u8 = undefined;
+            var new_path: []const u8 = undefined;
+
+            if (game_hashes) |h| {
+                new_path = try h.get(entry.hash) orelse std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+            } else {
+                new_path = std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+            }
+
+            // move to handled
+            out_dir.copyFile(path, out_dir, new_path, .{}) catch |err| blk: {
+                bw.flush() catch return;
+                switch (err) {
+                    error.FileNotFound => {
+                        if (fs.path.dirname(new_path)) |sub_dir| {
+                            if (out_dir.makePath(sub_dir)) {
+                                break :blk;
+                            } else |e| {
+                                logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(e) });
+                            }
+                        }
+                        logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(error.FileNotFound) });
+                    },
+                    else => unreachable, //logger.println("{s}: cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(e) }),
+                }
+                continue;
+            };
+
+            if (options.verbose) {
+                writer.print("{s}\n", .{new_path}) catch return;
+            }
             continue;
         }
 
-        var buf: [256]u8 = undefined;
-        var path = if (game_hashes) |h| try h.get(entry.hash) else null;
-        if (path == null) {
-            path = try std.fmt.bufPrint(&buf, "{x:0>16}.dds", .{entry.hash});
+        if (game_hashes) |h| {
+            path = try h.get(entry.hash) orelse std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+        } else {
+            path = std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
+        // move to a function or smth f this
+        if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
+            bw.flush() catch return;
+            switch (diagnostics) {
+                .make => |err| switch (err) {
+                    error.NameTooLong, error.BadPathName => {
+                        logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
+                        path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
+
+                        if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diag| {
+                            switch (diag) {
+                                .make => |e| logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(e) }),
+                                .map => |e| logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(e) }),
+                                .read => |e| {
+                                    switch (e) {
+                                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+                                    }
+                                    return handled.fatal(e);
+                                },
+                            }
+                        } else break :blk;
+                    },
+                    else => logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) }),
+                },
+                .map => |err| logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) }),
+                .read => |err| {
+                    switch (err) {
+                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+                    }
+                    return handled.fatal(err);
+                },
+            }
+            continue;
+        }
+
+        // If we're means that current `path` was written
         if (options.verbose) {
-            writer.print("{s}\n", .{path.?}) catch return;
+            writer.print("{s}\n", .{path}) catch return;
         }
-
-        if (writeFile(path.?, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |err| switch (err) {
-            .make => |e| logger.println("{s}: Cannot make: {s}", .{ path.?, @errorName(e) }),
-            .map => |e| logger.println("{s}: Cannot map: {s}", .{ path.?, @errorName(e) }),
-            .read => |e| logger.println("{s}: Cannot read: {s}", .{ path.?, @errorName(e) }),
-        };
     }
 
     bw.flush() catch return;
@@ -181,7 +249,6 @@ pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
     return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
         error.FileNotFound => {
             if (fs.path.dirname(sub_path)) |sub_dir| {
-                @setCold(false);
                 try dir.makePath(sub_dir);
                 return dir.createFile(sub_path, .{ .read = true });
             }

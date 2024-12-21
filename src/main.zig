@@ -91,7 +91,7 @@ pub fn main_generate_hashes() !void {
 
     std.debug.print("finalizing\n", .{});
 
-    const final = try hashes.final();
+    const final = try game_hashes.final();
 
     std.debug.print("writting to file: {d}\n", .{final.len});
     try out_file.writeAll(final);

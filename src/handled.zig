@@ -32,6 +32,14 @@ pub fn handle(v: anytype) @typeInfo(@TypeOf(v)).ErrorUnion.payload {
     };
 }
 
+pub fn fatal(err: anyerror) HandleError {
+    return switch (err) {
+        error.Unexpected => error.Unexpected,
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.Fatal,
+    };
+}
+
 pub const Mapping = struct {
     file: File,
     map: Map,
