@@ -7,12 +7,34 @@ const hashes = @import("hashes.zig");
 const handled = @import("handled.zig");
 const Options = @import("cli.zig").Options;
 const logger = @import("logger.zig");
+const castedReader = @import("casted_reader.zig").castedReader;
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
 
-//  there has to be a better way to handle these errors, it so dumb that i have the same functions, but one handles more errors
 pub fn list(options: Options) HandleError!void {
+    const Error = fs.File.Reader.Error || error{EndOfStream};
+
+    if (options.file == null) {
+        const stdin = io.getStdIn();
+        if (std.posix.isatty(stdin.handle)) {
+            logger.println("Refusing to read archive contents from terminal (missing -f option?)", .{});
+            return error.Fatal;
+        }
+
+        var br = io.bufferedReader(castedReader(Error, stdin));
+        try _list(br.reader(), options);
+        return;
+    }
+
+    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
+    defer file_map.deinit();
+
+    var fbs = io.fixedBufferStream(file_map.view);
+    try _list(castedReader(Error, &fbs), options);
+}
+
+fn _list(reader: anytype, options: Options) HandleError!void {
     const stdout = std.io.getStdOut();
     var bw = io.bufferedWriter(stdout.writer());
 
@@ -23,63 +45,16 @@ pub fn list(options: Options) HandleError!void {
 
     const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
-    if (options.file == null) {
-        const stdin = io.getStdIn();
-        if (std.posix.isatty(stdin.handle)) {
-            logger.println("Refusing to read archive contents from terminal (missing -f option?)", .{});
-            return error.Fatal;
-        }
-
-        var br = io.bufferedReader(stdin.reader());
-        var iter = wad.header.headerIterator(br.reader()) catch |err| return switch (err) {
-            error.InvalidFile, error.EndOfStream => {
-                logger.println("This does not look like a wad archive", .{});
-                return error.Fatal;
-            },
-            error.UnknownVersion => error.Outdated,
-            else => |e| {
-                logger.println("Unexpected read error: {s}", .{errors.stringify(e)});
-                return handled.fatal(e);
-            },
-        };
-
-        while (iter.next()) |me| {
-            const entry = me orelse break;
-            const path = if (game_hashes) |h| h.get(entry.hash) catch {
-                logger.println("This hashes file seems to be corrupted", .{});
-                return error.Fatal;
-            } else null;
-
-            if (path) |p| {
-                writer.print("{s}\n", .{p}) catch return;
-                continue;
-            }
-
-            writer.print("{x:0>16}\n", .{entry.hash}) catch return;
-        } else |err| {
-            bw.flush() catch return;
-            switch (err) {
-                error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
-                error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
-            }
-            return handled.fatal(err);
-        }
-
-        bw.flush() catch return;
-        return;
-    }
-
-    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
-    defer file_map.deinit();
-
-    var fbs = io.fixedBufferStream(file_map.view);
-    var iter = wad.header.headerIterator(fbs.reader()) catch |err| return switch (err) {
+    var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
         error.InvalidFile, error.EndOfStream => {
             logger.println("This does not look like a wad archive", .{});
             return error.Fatal;
         },
         error.UnknownVersion => error.Outdated,
+        else => |e| {
+            logger.println("Unexpected read error: {s}", .{errors.stringify(e)});
+            return handled.fatal(e);
+        },
     };
 
     while (iter.next()) |me| {
@@ -88,18 +63,21 @@ pub fn list(options: Options) HandleError!void {
             logger.println("This hashes file seems to be corrupted", .{});
             return error.Fatal;
         } else null;
+
         if (path) |p| {
             writer.print("{s}\n", .{p}) catch return;
             continue;
         }
+
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
     } else |err| {
         bw.flush() catch return;
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
         }
-        return error.Fatal;
+        return handled.fatal(err);
     }
 
     bw.flush() catch return;

@@ -8,6 +8,7 @@ const handled = @import("handled.zig");
 const Options = @import("cli.zig").Options;
 const logger = @import("logger.zig");
 const magic = @import("/magic.zig");
+const castedReader = @import("casted_reader.zig").castedReader;
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
@@ -15,19 +16,58 @@ const Allocator = std.mem.Allocator;
 const is_windows = builtin.os.tag == .windows;
 
 pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
-    const stdout = std.io.getStdOut();
-    var bw = io.BufferedWriter(1024, fs.File.Writer){
-        .unbuffered_writer = stdout.writer(),
-    };
-
-    const writer = bw.writer();
+    const Error = fs.File.Reader.Error || error{EndOfStream};
 
     if (options.directory == null) {
+        for (files) |file| {
+            std.debug.print("file: {s}\n", .{file});
+        }
+        // idea is simple
+        // hash these file names and sort them
+        // loop trough entries, when then sort our needed data offset
+        // read till we hit it and then just save it
         @panic("not implemented");
     }
 
-    var out_dir = fs.cwd().makeOpenPath(options.directory.?, .{}) catch |err| {
-        logger.println("{s}: Cannot make: {s}", .{ files[0], errors.stringify(err) });
+    var out_dir = fs.cwd().openDir(options.directory.?, .{}) catch |err| {
+        logger.println("{s}: Cannot open: {s}", .{ options.directory.?, errors.stringify(err) });
+        return handled.fatal(err);
+    };
+    defer out_dir.close();
+
+    const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
+    defer if (hashes_map) |h| h.deinit();
+
+    if (options.file == null) {
+        const stdin = io.getStdIn();
+        if (std.posix.isatty(stdin.handle)) {
+            logger.println("Refusing to read archive contents from terminal (missing -f option?)", .{});
+            return error.Fatal;
+        }
+
+        // buffered reader would be nice for header, but for body, not rly
+        // window_buffer is like buffered reader
+        try extractAll(allocator, castedReader(Error, stdin), options);
+        return;
+    }
+
+    const file_map = try handled.map(fs.cwd(), options.file.?, .{});
+    defer file_map.deinit();
+
+    var fbs = io.fixedBufferStream(file_map.view);
+    try extractAll(allocator, castedReader(Error, &fbs), options);
+}
+
+// how anytype works it just makes two huge extract all functions, i think we can reduce it to just one call
+// i verified this with ida, using any reader would be nice, but it has anyerror so not that good, then using any reader our bundle goes down by 30kb
+fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleError!void {
+    const stdout = std.io.getStdOut();
+    var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+
+    const writer = bw.writer();
+
+    var out_dir = fs.cwd().openDir(options.directory.?, .{}) catch |err| {
+        logger.println("{s}: Cannot open: {s}", .{ options.directory.?, errors.stringify(err) });
         return handled.fatal(err);
     };
     defer out_dir.close();
@@ -37,28 +77,11 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
     const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
+    var path_buf: [21]u8 = undefined;
+    var path: []const u8 = undefined;
+
     var window_buf: [1 << 17]u8 = undefined;
-    if (options.file == null) {
-        const stdin = io.getStdIn();
-        if (std.posix.isatty(stdin.handle)) {
-            logger.println("Refusing to read archive contents from terminal (missing -f option?)", .{});
-            return error.Fatal;
-        }
-
-        @panic("not implemented");
-
-        //bw.flush() catch return;
-
-        //return;
-    }
-
-    // add a check for of empty dir
-
-    const file_map = try handled.map(out_dir, options.file.?, .{});
-    defer file_map.deinit();
-
-    var fbs = io.fixedBufferStream(file_map.view);
-    var iter = wad.streamIterator(allocator, fbs.reader(), .{
+    var iter = wad.streamIterator(allocator, reader, .{
         .handle_duplicates = false,
         .window_buffer = &window_buf,
     }) catch |err| {
@@ -67,13 +90,11 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
             error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
             error.UnknownVersion => return error.Outdated,
             error.OutOfMemory => return error.OutOfMemory,
+            else => |e| logger.println("{s}", .{errors.stringify(e)}),
         }
         return handled.fatal(err);
     };
     defer iter.deinit();
-
-    var path_buf: [21]u8 = undefined;
-    var path: []const u8 = undefined;
 
     while (iter.next()) |mb| {
         const entry = mb orelse break;
@@ -111,54 +132,24 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
             path = std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
-        // move to a function or smth f this
         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
             bw.flush() catch return;
-            switch (diagnostics) {
-                .make => |err| switch (err) {
-                    error.NameTooLong, error.BadPathName => {
-                        logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
-                        path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
+            if (diagnostics == .make) switch (diagnostics.make) {
+                error.NameTooLong, error.BadPathName => {
+                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(diagnostics.make) });
+                    path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
 
-                        if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diag| {
-                            switch (diag) {
-                                .make => |e| {
-                                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(e) });
-                                    return handled.fatal(e);
-                                },
-                                .map => |e| {
-                                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(e) });
-                                    return handled.fatal(e);
-                                },
-                                .read => |e| {
-                                    switch (e) {
-                                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
-                                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-                                    }
-                                    return handled.fatal(e);
-                                },
-                            }
-                        } else break :blk;
-                    },
-                    else => logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) }),
-                },
-                .map => |err| {
-                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) });
-                    return handled.fatal(err);
-                },
-                .read => |err| {
-                    switch (err) {
-                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
-                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+                    if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diag| {
+                        return diag.handle(path);
+                    } else {
+                        break :blk;
                     }
-                    return handled.fatal(err);
                 },
-            }
+                else => {},
+            };
+            return diagnostics.handle(path);
         }
 
-        // If we're means that current `path` was written
         if (options.verbose) {
             writer.print("{s}\n", .{path}) catch return;
         }
@@ -167,17 +158,13 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+            else => |e| logger.println("{s}", .{errors.stringify(e)}),
         }
-        return error.Fatal;
+        return handled.fatal(err);
     }
 
     bw.flush() catch return;
 }
-
-const WriteOptions = struct {
-    dir: ?fs.Dir = null,
-    size: u32,
-};
 
 fn DiagnosticsError(comptime ReaderType: type) type {
     return union(enum) {
@@ -194,14 +181,79 @@ fn DiagnosticsError(comptime ReaderType: type) type {
             Unexpected,
         },
         read: (error{EndOfStream} || ReaderType.Error),
+        write: error{
+            Unexpected,
+            AccessDenied,
+            InputOutput,
+            SystemResources,
+            OperationAborted,
+            BrokenPipe,
+            ConnectionResetByPeer,
+            WouldBlock,
+            DeviceBusy,
+            FileTooBig,
+            NoSpaceLeft,
+            DiskQuota,
+            NotOpenForWriting,
+        },
+
+        fn handle(self: @This(), path: []const u8) HandleError {
+            switch (self) {
+                .make => |err| {
+                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
+                    return handled.fatal(err);
+                },
+                .map => |err| {
+                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) });
+                    return handled.fatal(err);
+                },
+                .read => |err| {
+                    switch (err) {
+                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+                        else => |e| logger.println("{s}", .{errors.stringify(e)}),
+                    }
+                    return handled.fatal(err);
+                },
+                .write => |err| {
+                    logger.println("{s}: Cannot write: {s}", .{ path, errors.stringify(err) });
+                    return handled.fatal(err);
+                },
+            }
+        }
     };
 }
+
+const WriteOptions = struct {
+    dir: ?fs.Dir = null,
+    size: u32,
+};
 
 fn writeFile(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
     if (is_windows) {
         return writeFileW(sub_path, reader, options);
     }
-    @compileError("not implemented for linux");
+
+    const file = makeFile(options.dir orelse fs.cwd(), sub_path) catch |err| return .{ .make = err };
+    defer file.close();
+
+    // on linux this is just faster
+    var amt: u32 = 0;
+    var buf: [16 * 1024]u8 = undefined;
+    while (options.size > amt) {
+        const slice = buf[0..@min(buf.len, options.size - amt)];
+        reader.readNoEof(slice) catch |err| return .{ .read = err };
+        amt += @intCast(slice.len);
+
+        file.writeAll(slice) catch |err| return switch (err) {
+            error.LockViolation => unreachable, //  no lock
+            error.InvalidArgument => unreachable,
+            else => |e| .{ .write = e },
+        };
+    }
+
+    return null;
 }
 
 fn writeFileW(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
