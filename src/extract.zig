@@ -60,6 +60,7 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
 // how anytype works it just makes two huge extract all functions, i think we can reduce it to just one call
 // i verified this with ida, using any reader would be nice, but it has anyerror so not that good, then using any reader our bundle goes down by 30kb
+// we can use like AnyReader but with typed errors
 fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleError!void {
     const stdout = std.io.getStdOut();
     var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
@@ -231,16 +232,13 @@ const WriteOptions = struct {
 };
 
 fn writeFile(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
-    if (is_windows) {
-        return writeFileW(sub_path, reader, options);
-    }
-
     const file = makeFile(options.dir orelse fs.cwd(), sub_path) catch |err| return .{ .make = err };
     defer file.close();
 
-    // on linux this is just faster
+    // writting in chunks seems to be faster after all
+    // and with big buffers like these it most of the times is only one sys call
     var amt: u32 = 0;
-    var buf: [16 * 1024]u8 = undefined;
+    var buf: [1 << 17]u8 = undefined;
     while (options.size > amt) {
         const slice = buf[0..@min(buf.len, options.size - amt)];
         reader.readNoEof(slice) catch |err| return .{ .read = err };
@@ -252,28 +250,6 @@ fn writeFile(sub_path: []const u8, reader: anytype, options: WriteOptions) ?Diag
             else => |e| .{ .write = e },
         };
     }
-
-    return null;
-}
-
-fn writeFileW(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
-    // on windows mapping files is much faster then buffered writting
-    const file = makeFile(options.dir orelse fs.cwd(), sub_path) catch |err| return .{ .make = err };
-    defer file.close();
-
-    if (options.size == 0) {
-        @setCold(true);
-        return null;
-    }
-
-    const map = mapping.mapFileW(file, .{ .mode = .write_only, .size = options.size }) catch |err| return switch (err) {
-        error.LockedMemoryLimitExceeded => unreachable, // no lock requested
-        error.InvalidSize => unreachable, // size will not be zero
-        else => |e| .{ .map = e },
-    };
-    defer map.unmap();
-
-    reader.readNoEof(map.view) catch |err| return .{ .read = err };
 
     return null;
 }
