@@ -166,9 +166,9 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 const prev_entry = self.entries.allocatedSlice()[self.entries.items.len];
 
                 if (entry.offset == prev_entry.offset) {
-                    assert(entry.compressed_len == prev_entry.compressed_len);
-                    assert(entry.decompressed_len == prev_entry.decompressed_len);
-                    assert(entry.type == prev_entry.type);
+                    if (entry.compressed_len != prev_entry.compressed_len) return error.InvalidFile;
+                    if (entry.decompressed_len != prev_entry.decompressed_len) return error.InvalidFile;
+                    if (entry.type != prev_entry.type) return error.InvalidFile;
 
                     return .{
                         .hash = entry.hash,

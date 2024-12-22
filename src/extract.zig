@@ -14,7 +14,7 @@ const HandleError = handled.HandleError;
 const Allocator = std.mem.Allocator;
 const is_windows = builtin.os.tag == .windows;
 
-pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) !void {
+pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
     const stdout = std.io.getStdOut();
     var bw = io.BufferedWriter(1024, fs.File.Writer){
         .unbuffered_writer = stdout.writer(),
@@ -22,7 +22,13 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
     const writer = bw.writer();
 
-    var out_dir = try fs.cwd().makeOpenPath(files[0], .{});
+    // we should make this work like tar, files should  be what files we want to extract
+    // if we pass in -C option it means we wat some out dir or smth
+
+    var out_dir = fs.cwd().makeOpenPath(files[0], .{}) catch |err| {
+        logger.println("{s}: Cannot make: {s}", .{ files[0], errors.stringify(err) });
+        return handled.fatal(err);
+    };
     defer out_dir.close();
 
     const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
@@ -51,22 +57,34 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
     defer file_map.deinit();
 
     var fbs = io.fixedBufferStream(file_map.view);
-    var iter = try wad.streamIterator(allocator, fbs.reader(), .{
+    var iter = wad.streamIterator(allocator, fbs.reader(), .{
         .handle_duplicates = false,
         .window_buffer = &window_buf,
-    });
+    }) catch |err| {
+        switch (err) {
+            error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
+            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+            error.UnknownVersion => return error.Outdated,
+            error.OutOfMemory => return error.OutOfMemory,
+        }
+        return handled.fatal(err);
+    };
     defer iter.deinit();
 
     var path_buf: [21]u8 = undefined;
     var path: []const u8 = undefined;
 
-    while (try iter.next()) |entry| {
+    while (iter.next()) |mb| {
+        const entry = mb orelse break;
         if (entry.duplicate()) {
             var new_path_buf: [21]u8 = undefined;
             var new_path: []const u8 = undefined;
 
             if (game_hashes) |h| {
-                new_path = try h.get(entry.hash) orelse std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+                new_path = h.get(entry.hash) catch {
+                    logger.println("This hashes file seems to be corrupted", .{});
+                    return error.Fatal;
+                } orelse std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
             } else {
                 new_path = std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
             }
@@ -84,13 +102,15 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
         }
 
         if (game_hashes) |h| {
-            path = try h.get(entry.hash) orelse std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+            path = h.get(entry.hash) catch {
+                logger.println("This hashes file seems to be corrupted", .{});
+                return error.Fatal;
+            } orelse std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         } else {
             path = std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
         // move to a function or smth f this
-        // mb we do want to kill if some errors are not handled, and then try to clear the dirrectory
         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
             bw.flush() catch return;
             switch (diagnostics) {
@@ -101,8 +121,14 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
                         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diag| {
                             switch (diag) {
-                                .make => |e| logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(e) }),
-                                .map => |e| logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(e) }),
+                                .make => |e| {
+                                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(e) });
+                                    return handled.fatal(e);
+                                },
+                                .map => |e| {
+                                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(e) });
+                                    return handled.fatal(e);
+                                },
                                 .read => |e| {
                                     switch (e) {
                                         error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
@@ -116,7 +142,10 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
                     },
                     else => logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) }),
                 },
-                .map => |err| logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) }),
+                .map => |err| {
+                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) });
+                    return handled.fatal(err);
+                },
                 .read => |err| {
                     switch (err) {
                         error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
@@ -126,13 +155,19 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
                     return handled.fatal(err);
                 },
             }
-            continue;
         }
 
         // If we're means that current `path` was written
         if (options.verbose) {
             writer.print("{s}\n", .{path}) catch return;
         }
+    } else |err| {
+        bw.flush() catch return;
+        switch (err) {
+            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
+            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+        }
+        return error.Fatal;
     }
 
     bw.flush() catch return;
