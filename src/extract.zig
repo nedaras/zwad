@@ -7,14 +7,14 @@ const hashes = @import("hashes.zig");
 const handled = @import("handled.zig");
 const Options = @import("cli.zig").Options;
 const logger = @import("logger.zig");
-const magic = @import("magic.zig");
+const magic = @import("/magic.zig");
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
 const Allocator = std.mem.Allocator;
 const is_windows = builtin.os.tag == .windows;
 
-pub fn extract(allocator: Allocator, options: Options) !void {
+pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) !void {
     const stdout = std.io.getStdOut();
     var bw = io.BufferedWriter(1024, fs.File.Writer){
         .unbuffered_writer = stdout.writer(),
@@ -22,7 +22,7 @@ pub fn extract(allocator: Allocator, options: Options) !void {
 
     const writer = bw.writer();
 
-    var out_dir = try fs.cwd().makeOpenPath("out", .{});
+    var out_dir = try fs.cwd().makeOpenPath(files[0], .{});
     defer out_dir.close();
 
     const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
@@ -38,53 +38,11 @@ pub fn extract(allocator: Allocator, options: Options) !void {
             return error.Fatal;
         }
 
-        var br = io.bufferedReader(stdin.reader());
-        var iter = try wad.streamIterator(allocator, br.reader(), .{
-            .handle_duplicates = false,
-            .window_buffer = &window_buf,
-        });
-        defer iter.deinit();
+        @panic("not implemented");
 
-        while (try iter.next()) |entry| {
-            if (entry.duplicate()) {
-                continue;
-            }
+        //bw.flush() catch return;
 
-            // mmapping on linux seems to be rly fucking sloe
-            std.debug.print("{x}.txt\n", .{entry.hash});
-
-            var buf: [256]u8 = undefined;
-            const file_name = try std.fmt.bufPrint(&buf, "{x}.txt", .{entry.hash});
-
-            const out_file = try out_dir.createFile(file_name, .{ .read = true });
-            defer out_file.close();
-
-            var amt: usize = 0;
-            var write_buf: [16 * 1024]u8 = undefined;
-            while (true) {
-                amt += try entry.read(&write_buf);
-                if (amt == 0) break;
-                try out_file.writeAll(write_buf[0..amt]);
-            }
-
-            std.debug.assert(amt == entry.decompressed_len);
-
-            //try out_file.setEndPos(file_name.len + 1);
-
-            //const map = try mapping.mapFile(out_file, .{ .mode = .read_write, .size = file_name.len });
-            //defer map.unmap();
-            //const map = try std.posix.mmap(null, file_name.len + 1, std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, out_file.handle, 0);
-            //defer std.posix.munmap(map);
-
-            //@memcpy(map[0 .. map.len - 1], file_name);
-            //map[file_name.len] = '\n';
-
-            //try std.posix.msync(map, std.posix.MSF.SYNC);
-        }
-
-        bw.flush() catch return;
-
-        return;
+        //return;
     }
 
     // add a check for of empty dir
@@ -113,23 +71,10 @@ pub fn extract(allocator: Allocator, options: Options) !void {
                 new_path = std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
             }
 
-            // move to handled
-            out_dir.copyFile(path, out_dir, new_path, .{}) catch |err| blk: {
+            copyFile(out_dir, path, out_dir, new_path, .{}) catch |err| {
                 bw.flush() catch return;
-                switch (err) {
-                    error.FileNotFound => {
-                        if (fs.path.dirname(new_path)) |sub_dir| {
-                            if (out_dir.makePath(sub_dir)) {
-                                break :blk;
-                            } else |e| {
-                                logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(e) });
-                            }
-                        }
-                        logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(error.FileNotFound) });
-                    },
-                    else => unreachable, //logger.println("{s}: cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(e) }),
-                }
-                continue;
+                logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(err) });
+                return handled.fatal(err);
             };
 
             if (options.verbose) {
@@ -145,6 +90,7 @@ pub fn extract(allocator: Allocator, options: Options) !void {
         }
 
         // move to a function or smth f this
+        // mb we do want to kill if some errors are not handled, and then try to clear the dirrectory
         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
             bw.flush() catch return;
             switch (diagnostics) {
@@ -208,6 +154,7 @@ fn DiagnosticsError(comptime ReaderType: type) type {
             ProcessFdQuotaExceeded,
             SystemFdQuotaExceeded,
             NoSpaceLeft,
+            Unseekable,
             Unexpected,
         },
         read: (error{EndOfStream} || ReaderType.Error),
@@ -255,5 +202,32 @@ pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
             return error.FileNotFound;
         },
         else => |e| return e,
+    };
+}
+
+pub fn copyFile(source_dir: fs.Dir, source_path: []const u8, dest_dir: fs.Dir, dest_path: []const u8, options: fs.Dir.CopyFileOptions) !void {
+    source_dir.copyFile(source_path, dest_dir, dest_path, options) catch |err| {
+        switch (err) {
+            error.FileNotFound => {
+                if (fs.path.dirname(dest_path)) |sub_dir| {
+                    try dest_dir.makePath(sub_dir);
+                    return source_dir.copyFile(source_path, dest_dir, dest_path, options) catch |e| switch (e) {
+                        error.OutOfMemory => error.SystemResources,
+                        error.PermissionDenied => return error.AccessDenied,
+                        error.InvalidArgument => unreachable,
+                        error.LockViolation, error.FileLocksNotSupported => unreachable,
+                        error.FileDescriptorNotASocket, error.MessageTooBig, error.NetworkUnreachable, error.NetworkSubsystemFailed => unreachable,
+                        else => |x| x,
+                    };
+                }
+                return error.FileNotFound;
+            },
+            error.OutOfMemory => return error.SystemResources,
+            error.PermissionDenied => return error.AccessDenied,
+            error.InvalidArgument, error.FileLocksNotSupported => unreachable, // i think zig should handle this before hand
+            error.LockViolation => unreachable, // idk why zig left this error
+            error.FileDescriptorNotASocket, error.MessageTooBig, error.NetworkUnreachable, error.NetworkSubsystemFailed => unreachable, // Not doing any networking
+            else => |e| return e,
+        }
     };
 }

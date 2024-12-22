@@ -35,9 +35,21 @@ pub const Error = error{
     DiskQuota,
     LinkQuotaExceeded,
     ReadOnlyFileSystem,
+    SwapFile,
+    NotOpenForWriting,
+    FilesOpenedWithWrongFlags,
+    Unseekable,
+    //MessageTooBig,
+    //NetworkUnreachable,
+    //NetworkSubsystemFailed,
+    //FileDescriptorNotASocket,
+    FastOpenAlreadyInProgress,
+    RenameAcrossMountPoints,
+    CorruptedData,
     Unexpected,
 };
 
+// https://www.gnu.org/software/libc/manual/html_node/Error-Codes.html
 pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors more expresive
     return switch (err) {
         error.FileNotFound => "No such file or directory",
@@ -56,7 +68,7 @@ pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors
         error.ProcessFdQuotaExceeded => "Too many open files",
         error.IsDir => "Is a directory",
         error.PathAlreadyExists => "File exists",
-        error.FileBusy => "Text file busy",
+        error.FileBusy, error.SwapFile => "Text file busy",
         error.NoSpaceLeft => "No space left on device",
         error.WouldBlock => "Operation would block",
         error.FileLocksNotSupported => "Operation not supported",
@@ -66,7 +78,18 @@ pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors
         error.ConnectionTimedOut => "Connection timed out",
         error.SocketNotConnected => "Transport endpoint is not connected",
         error.NotOpenForReading, error.BrokenPipe => "File descriptor in bad state",
-        error.DiskQuota, error.LinkQuotaExceeded, error.ReadOnlyFileSystem => @panic("unwrap"),
+        error.ReadOnlyFileSystem => "Read-only file system",
+        error.DiskQuota => "Disk quota exceeded",
+        error.LinkQuotaExceeded => "Too many lunks",
+        error.NotOpenForWriting, error.FilesOpenedWithWrongFlags => "Bad file descriptor",
+        error.Unseekable => "Cannot seek",
+        //error.MessageTooBig => "Message too long",
+        //error.NetworkUnreachable => "No route to host",
+        //error.NetworkSubsystemFailed => "Network is down",
+        //error.FileDescriptorNotASocket => "Socket operation on non-socket",
+        error.FastOpenAlreadyInProgress => "Operation already in progress",
+        error.RenameAcrossMountPoints => "Invalid cross-device link",
+        error.CorruptedData => "Integrity check failed",
         error.Unexpected => "Unknown error",
     };
 }

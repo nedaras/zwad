@@ -38,8 +38,8 @@ pub fn list(options: Options) HandleError!void {
             },
             error.UnknownVersion => error.Outdated,
             else => |e| {
-                logger.println("{s}", .{errors.stringify(e)});
-                return if (e == error.Unexpected) error.Unexpected else error.Fatal;
+                logger.println("Unexpected read error: {s}", .{errors.stringify(e)});
+                return handled.fatal(e);
             },
         };
 
@@ -57,19 +57,16 @@ pub fn list(options: Options) HandleError!void {
 
             writer.print("{x:0>16}\n", .{entry.hash}) catch return;
         } else |err| {
+            bw.flush() catch return;
             switch (err) {
                 error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
                 error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                else => |e| {
-                    logger.println("{s}", .{errors.stringify(e)});
-                    return if (e == error.Unexpected) error.Unexpected else error.Fatal;
-                },
+                else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
             }
-            return error.Fatal;
+            return handled.fatal(err);
         }
 
-        bw.flush() catch {};
-
+        bw.flush() catch return;
         return;
     }
 
@@ -97,6 +94,7 @@ pub fn list(options: Options) HandleError!void {
         }
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
     } else |err| {
+        bw.flush() catch return;
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
@@ -104,5 +102,5 @@ pub fn list(options: Options) HandleError!void {
         return error.Fatal;
     }
 
-    bw.flush() catch {};
+    bw.flush() catch return;
 }

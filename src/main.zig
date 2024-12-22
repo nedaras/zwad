@@ -111,7 +111,7 @@ pub fn main() !void {
 
     return switch (args.operation) {
         .list => handle(list(args.options)),
-        .extract => try extract(allocator, args.options),
+        .extract => try extract(allocator, args.options, args.files),
     };
 }
 

@@ -35,6 +35,7 @@ pub const MapFileError = error{
     ProcessFdQuotaExceeded,
     SystemFdQuotaExceeded,
     NoSpaceLeft,
+    Unseekable,
     Unexpected,
 };
 
@@ -57,10 +58,7 @@ pub fn mapFile(file: fs.File, flags: MapFlags) MapFileError!MappedFile {
         return mapFileW(file, flags);
     }
 
-    const size = flags.size orelse file.getEndPos() catch |err| switch (err) {
-        error.Unseekable => unreachable,
-        else => |e| return e,
-    };
+    const size = flags.size orelse try file.getEndPos();
 
     var prot: u32 = 0;
     if (flags.isRead()) prot |= posix.PROT.READ;
@@ -81,10 +79,7 @@ pub fn mapFile(file: fs.File, flags: MapFlags) MapFileError!MappedFile {
 
 /// Call unmap after use.
 pub fn mapFileW(file: fs.File, flags: MapFlags) MapFileError!MappedFile {
-    const size = flags.size orelse file.getEndPos() catch |err| switch (err) {
-        error.Unseekable => unreachable,
-        else => |e| return e,
-    };
+    const size = flags.size orelse try file.getEndPos();
 
     if (flags.isRead() and size == 0) return error.InvalidSize;
 
