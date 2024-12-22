@@ -7,7 +7,8 @@ pub const Option = union(enum) {
     list: ?[]const u8,
     file: ?[]const u8,
     hashes: ?[]const u8,
-    verbose,
+    directory: ?[]const u8,
+    verbose: ?[]const u8,
     unknown,
 };
 
@@ -24,7 +25,7 @@ pub const OptionIterator = struct {
             }
             if (self.buffer[0] == '-' and self.buffer[1] == '-') {
                 self.index = null;
-                return getOptionFromName(self.buffer[2..]); // todo: handle key value pairs --file=bob
+                return getOptionFromName(self.buffer[2..]);
             }
             self.index.? += 1;
             start += 1;
@@ -36,19 +37,29 @@ pub const OptionIterator = struct {
         }
         self.index.? += 1;
 
+        const val: ?[]const u8 = if (self.index.? == self.buffer.len) null else self.buffer[self.index.?..];
         return switch (self.buffer[start]) {
+            'f' => {
+                self.index = null;
+                return .{ .file = val };
+            },
+            'h' => {
+                self.index = null;
+                return .{ .hashes = val };
+            },
+            'C' => {
+                self.index = null;
+                return .{ .directory = val };
+            },
             't' => .{ .list = null },
             'x' => .{ .extract = null },
-            'f' => .{ .file = null },
-            'h' => .{ .hashes = null },
-            'v' => .verbose,
+            'v' => .{ .verbose = null },
             else => .unknown,
         };
     }
 };
 
 pub fn optionIterator(slice: []const u8) OptionIterator {
-    assert(mem.count(u8, slice, " ") == 0);
     return .{
         .buffer = slice,
         .index = 0,
@@ -67,6 +78,7 @@ fn getOptionFromName(slice: []const u8) Option {
     if (mem.eql(u8, key, "get")) return .{ .extract = val };
     if (mem.eql(u8, key, "file")) return .{ .file = val };
     if (mem.eql(u8, key, "hashes")) return .{ .hashes = val };
-    if (mem.eql(u8, key, "verbose")) return .verbose;
+    if (mem.eql(u8, key, "directory")) return .{ .directory = val };
+    if (mem.eql(u8, key, "verbose")) return .{ .verbose = val };
     return .unknown;
 }

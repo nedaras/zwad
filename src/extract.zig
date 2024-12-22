@@ -22,10 +22,11 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
     const writer = bw.writer();
 
-    // we should make this work like tar, files should  be what files we want to extract
-    // if we pass in -C option it means we wat some out dir or smth
+    if (options.directory == null) {
+        @panic("not implemented");
+    }
 
-    var out_dir = fs.cwd().makeOpenPath(files[0], .{}) catch |err| {
+    var out_dir = fs.cwd().makeOpenPath(options.directory.?, .{}) catch |err| {
         logger.println("{s}: Cannot make: {s}", .{ files[0], errors.stringify(err) });
         return handled.fatal(err);
     };

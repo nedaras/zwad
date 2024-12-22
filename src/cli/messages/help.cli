@@ -7,6 +7,9 @@ archive.
   -t, --list                 list the contents of an archive
   -x, --extract, --get       extract files from an archive
 
+ Local file name selection:
+  -C, --directory=DIR        change to directory DIR
+
  Device selection and switching:
   -f, --file=ARCHIVE         use archive file or device ARCHIVE
   -h, --hashes=FILE          use hashes file or device FILE
