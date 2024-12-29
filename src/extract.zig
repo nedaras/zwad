@@ -123,7 +123,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             }
             continue;
         }
-
+        std.debug.print("dec_len: {d}, comp_len: {d}\n", .{ entry.decompressed_len, entry.compressed_len });
         if (game_hashes) |h| {
             path = h.get(entry.hash) catch {
                 logger.println("This hashes file seems to be corrupted", .{});
