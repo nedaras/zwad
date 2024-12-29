@@ -1,23 +1,24 @@
 const std = @import("std");
 const toc = @import("toc.zig");
-const Version = @import("version.zig").Version;
+const version = @import("version.zig");
+const Version = version.Version;
+
+pub const Entry = struct {
+    hash: u64,
+    compressed_len: u32,
+    decompressed_len: u32,
+
+    type: toc.EntryType,
+
+    offset: u32,
+};
 
 pub fn HeaderIterator(comptime ReaderType: type) type {
     return struct {
         pub const Error = error{ InvalidFile, EndOfStream } || ReaderType.Error;
 
-        pub const Entry = struct {
-            hash: u64,
-            compressed_len: u32,
-            decompressed_len: u32,
-
-            type: toc.EntryType,
-
-            offset: u32,
-        };
-
         reader: ReaderType,
-        version: Version,
+        ver: Version,
 
         entries_len: u32,
         index: u32,
@@ -30,7 +31,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
             if (self.index == self.entries_len) return null;
 
             const gb = 1024 * 1024 * 1024;
-            const entry: Entry = switch (self.version) {
+            const entry: Entry = switch (self.ver) {
                 .v1 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v1);
                     break :blk .{
@@ -94,13 +95,17 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
 
             return entry;
         }
+
+        pub fn bytesRead(self: Self) u32 {
+            return version.sizeOfHeader(self.ver) + version.sizeOfEntry(self.ver) * self.index;
+        }
     };
 }
 
 pub fn headerIterator(reader: anytype) !HeaderIterator(@TypeOf(reader)) {
-    const version = try getVersion(reader);
+    const ver = try getVersion(reader);
 
-    const entries_len = switch (version) {
+    const entries_len = switch (ver) {
         .v1 => (try reader.readStruct(toc.Header.v1)).entries_len,
         .v2 => (try reader.readStruct(toc.Header.v2)).entries_len,
         .v3, .v3_3, .v3_4 => (try reader.readStruct(toc.Header.v3)).entries_len,
@@ -108,20 +113,20 @@ pub fn headerIterator(reader: anytype) !HeaderIterator(@TypeOf(reader)) {
 
     return .{
         .reader = reader,
-        .version = version,
+        .ver = ver,
         .entries_len = entries_len,
         .index = 0,
     };
 }
 
 fn getVersion(reader: anytype) !Version {
-    const version: toc.Version = try reader.readStruct(toc.Version);
-    if (version.magic[0] != 'R' or version.magic[1] != 'W') return error.InvalidFile;
+    const ver: toc.Version = try reader.readStruct(toc.Version);
+    if (ver.magic[0] != 'R' or ver.magic[1] != 'W') return error.InvalidFile;
 
-    return switch (version.major) { // i dont rly know what versions valid what not
-        1 => if (version.minor != 0) return error.UnknownVersion else .v1,
-        2 => if (version.minor != 0) return error.UnknownVersion else .v2,
-        3 => return switch (version.minor) {
+    return switch (ver.major) { // i dont rly know what versions valid what not
+        1 => if (ver.minor != 0) return error.UnknownVersion else .v1,
+        2 => if (ver.minor != 0) return error.UnknownVersion else .v2,
+        3 => return switch (ver.minor) {
             0 => .v3,
             3 => .v3_3,
             4 => .v3_4,

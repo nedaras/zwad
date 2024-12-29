@@ -12,8 +12,6 @@ const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
 
-//const compress = @import("compress.zig");
-
 pub fn list(options: Options) HandleError!void {
     const Error = fs.File.Reader.Error || error{EndOfStream};
 
@@ -24,7 +22,9 @@ pub fn list(options: Options) HandleError!void {
             return error.Fatal;
         }
 
+        // todo: when zig fixed its unreachable prongs we should be able to not do this weird stuff
         var br = io.bufferedReader(castedReader(Error, stdin));
+        //var br = io.bufferedReader(stdin.reader());
         try _list(br.reader(), options);
         return;
     }
@@ -34,6 +34,7 @@ pub fn list(options: Options) HandleError!void {
 
     var fbs = io.fixedBufferStream(file_map.view);
     try _list(castedReader(Error, &fbs), options);
+    //try _list(fbs.reader(), options);
 }
 
 fn _list(reader: anytype, options: Options) HandleError!void {
@@ -83,20 +84,4 @@ fn _list(reader: anytype, options: Options) HandleError!void {
     }
 
     bw.flush() catch return;
-
-    // dec_len: 4224, comp_len: 73
-    // testing
-    //var buf: [10]u8 = undefined;
-    //var zstd_stream = compress.btrstd.decompressor(std.heap.page_allocator, reader, .{
-    //.window_buffer = &buf,
-    //.decompressed_size = 4224,
-    //.compressed_size = 73,
-    //}) catch unreachable;
-
-    //var dec: [1000]u8 = undefined;
-    //while (true) {
-    //const amt = zstd_stream.read(&dec) catch unreachable;
-    //std.debug.print("zstd_stream wrote {d} bytes\n", .{amt});
-    //if (amt == 0) break;
-    //}
 }

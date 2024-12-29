@@ -116,7 +116,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
         const Self = @This();
 
-        const Entries = std.ArrayListUnmanaged(HeaderIterator.Entry);
+        const Entries = std.ArrayListUnmanaged(header.Entry);
 
         pub fn init(allocator: Allocator, reader: ReaderType, options: Options) !Self {
             const iter = try header.headerIterator(reader);
@@ -146,7 +146,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 try buildEntries(self);
 
                 if (self.entries.getLastOrNull()) |entry| {
-                    const v = self.inner.version;
+                    const v = self.inner.ver;
                     const off = version.sizeOfHeader(v) + version.sizeOfEntry(v) * self.inner.entries_len;
                     if (entry.offset != off) {
                         return error.InvalidFile;
@@ -217,7 +217,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             };
         }
 
-        fn peek(self: *Self) ?HeaderIterator.Entry {
+        fn peek(self: *Self) ?header.Entry {
             if (self.entries.items.len > 1) {
                 return self.entries.items[self.entries.items.len - 2];
             }
@@ -231,12 +231,12 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             }
 
             const Context = struct {
-                fn lessThan(_: @This(), a: HeaderIterator.Entry, b: HeaderIterator.Entry) bool {
+                fn lessThan(_: void, a: header.Entry, b: header.Entry) bool {
                     return a.offset > b.offset;
                 }
             };
             // we should do in place sort, so it would be O(log(n))
-            std.sort.block(HeaderIterator.Entry, self.entries.items, Context{}, Context.lessThan);
+            std.sort.block(header.Entry, self.entries.items, {}, Context.lessThan);
         }
     };
 }

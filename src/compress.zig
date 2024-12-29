@@ -165,6 +165,7 @@ pub const btrstd = struct {
             unread_bytes: usize,
 
             pub const Error = ReaderType.Error || zstandart.DecompressStreamError;
+            pub const Reader = io.Reader(*Self, Error, read);
 
             const Self = @This();
 
@@ -183,7 +184,7 @@ pub const btrstd = struct {
             }
 
             pub fn deinit(self: *Self) void {
-                zstandart.deinitDecompressStream(self.handle);
+                zstandart.deinitDecompressStream(self.inner);
                 self.* = undefined;
             }
 
@@ -228,6 +229,10 @@ pub const btrstd = struct {
 
                 self.available_bytes -= out_buf.pos;
                 return out_buf.pos;
+            }
+
+            pub fn reader(self: *Self) Reader {
+                return .{ .context = self };
             }
 
             /// Write unread bytes to a ring buffer

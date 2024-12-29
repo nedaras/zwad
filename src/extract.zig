@@ -8,35 +8,19 @@ const handled = @import("handled.zig");
 const Options = @import("cli.zig").Options;
 const logger = @import("logger.zig");
 const magic = @import("/magic.zig");
+const xxhash = @import("xxhash.zig");
+const compress = @import("compress.zig");
 const castedReader = @import("casted_reader.zig").castedReader;
 const fs = std.fs;
 const io = std.io;
 const HandleError = handled.HandleError;
 const Allocator = std.mem.Allocator;
 const is_windows = builtin.os.tag == .windows;
+const Entry = wad.header.Entry;
+const assert = std.debug.assert;
 
-pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
+pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) !void {
     const Error = fs.File.Reader.Error || error{EndOfStream};
-
-    if (options.directory == null) {
-        for (files) |file| {
-            std.debug.print("file: {s}\n", .{file});
-        }
-        // idea is simple
-        // hash these file names and sort them
-        // loop trough entries, when then sort our needed data offset
-        // read till we hit it and then just save it
-        @panic("not implemented");
-    }
-
-    var out_dir = fs.cwd().openDir(options.directory.?, .{}) catch |err| {
-        logger.println("{s}: Cannot open: {s}", .{ options.directory.?, errors.stringify(err) });
-        return handled.fatal(err);
-    };
-    defer out_dir.close();
-
-    const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
-    defer if (hashes_map) |h| h.deinit();
 
     if (options.file == null) {
         const stdin = io.getStdIn();
@@ -47,6 +31,9 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
 
         // buffered reader would be nice for header, but for body, not rly
         // window_buffer is like buffered reader
+        if (options.directory == null) {
+            return extractSome(allocator, castedReader(Error, stdin), options, files);
+        }
         try extractAll(allocator, castedReader(Error, stdin), options);
         return;
     }
@@ -55,13 +42,90 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
     defer file_map.deinit();
 
     var fbs = io.fixedBufferStream(file_map.view);
+    if (options.directory == null) {
+        return extractSome(allocator, castedReader(Error, &fbs), options, files);
+    }
     try extractAll(allocator, castedReader(Error, &fbs), options);
+}
+
+fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: []const []const u8) !void {
+    assert(options.directory == null);
+    if (files.len == 0) return;
+
+    const stdout = std.io.getStdOut();
+    var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+
+    var file_hashes = std.ArrayList(u64).init(allocator);
+    defer file_hashes.deinit();
+
+    var paths = std.AutoArrayHashMap(u64, []const u8).init(allocator); // this is dumb
+    defer paths.deinit();
+
+    var entries = std.ArrayList(Entry).init(allocator);
+    defer entries.deinit();
+
+    blk: for (files) |file| {
+        const hash = xxhash.XxHash64.hash(0, file);
+        for (file_hashes.items) |h| {
+            if (hash == h) continue :blk;
+        }
+        try file_hashes.append(hash);
+        try paths.put(hash, file);
+    }
+    std.sort.block(u64, file_hashes.items, {}, std.sort.asc(u64));
+
+    var iter = try wad.header.headerIterator(reader);
+    while (try iter.next()) |entry| {
+        if (entries.items.len == file_hashes.items.len) break;
+
+        if (entry.hash == file_hashes.items[entries.items.len]) {
+            try entries.append(entry);
+        }
+    }
+
+    const Context = struct {
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return a.offset < b.offset;
+        }
+    };
+    std.sort.block(Entry, entries.items, {}, Context.lessThan);
+
+    var window_buffer: [1 << 17]u8 = undefined;
+    var zstd_stream = try compress.btrstd.decompressor(allocator, reader, .{
+        .window_buffer = &window_buffer,
+        .decompressed_size = undefined,
+        .compressed_size = undefined,
+    });
+    defer zstd_stream.deinit();
+
+    var read: u32 = iter.bytesRead();
+    for (entries.items) |entry| { // there can be duplicates
+        if (entry.type != .zstd and entry.type != .zstd_multi) {
+            @panic("not implemented");
+        }
+
+        const skip = entry.offset - read;
+        _ = try reader.skipBytes(skip, .{ .buf_size = 4096 });
+
+        zstd_stream.available_bytes = entry.decompressed_len;
+        zstd_stream.unread_bytes = entry.compressed_len;
+        // todo: for handling duplicates we can just use one buffer to write out lots of files
+        if (writeFile(paths.get(entry.hash).?, zstd_stream.reader(), .{ .size = entry.decompressed_len })) |_| {
+            return error.WriteFile;
+        }
+
+        read += skip + entry.compressed_len;
+    }
+
+    bw.flush() catch return;
 }
 
 // how anytype works it just makes two huge extract all functions, i think we can reduce it to just one call
 // i verified this with ida, using any reader would be nice, but it has anyerror so not that good, then using any reader our bundle goes down by 30kb
 // we can use like AnyReader but with typed errors
 fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleError!void {
+    assert(options.directory != null);
+
     const stdout = std.io.getStdOut();
     var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
 
