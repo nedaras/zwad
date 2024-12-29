@@ -67,6 +67,16 @@ fn _list(reader: anytype, options: Options) HandleError!void {
             return error.Fatal;
         } else null;
 
+        if (options.verbose) {
+            const type_name = switch (entry.type) {
+                .raw => "none",
+                .gzip => "gzip",
+                .link => "link",
+                .zstd, .zstd_multi => "zstd",
+            };
+            writer.print("{s} {d: >7} ", .{ type_name, entry.decompressed_len }) catch return;
+        }
+
         if (path) |p| {
             writer.print("{s}\n", .{p}) catch return;
             continue;
