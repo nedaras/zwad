@@ -150,8 +150,6 @@ pub const zstd = struct {
 pub const btrstd = struct {
     pub const DecompressorOptions = struct {
         window_buffer: []u8,
-        decompressed_size: usize,
-        compressed_size: usize,
     };
 
     pub fn Decompressor(comptime ReaderType: type) type {
@@ -161,8 +159,8 @@ pub const btrstd = struct {
 
             buffer: std.RingBuffer,
 
-            available_bytes: usize,
-            unread_bytes: usize,
+            available_bytes: ?usize, // we should get this our self using zstd
+            unread_bytes: ?usize, // this idk should be set by an user, or mb zstd can give it back
 
             pub const Error = ReaderType.Error || zstandart.DecompressStreamError;
             pub const Reader = io.Reader(*Self, Error, read);
@@ -173,8 +171,8 @@ pub const btrstd = struct {
                 return .{
                     .source = rt,
                     .inner = try zstandart.initDecompressStream(allocator),
-                    .available_bytes = options.decompressed_size,
-                    .unread_bytes = options.compressed_size,
+                    .available_bytes = null,
+                    .unread_bytes = null,
                     .buffer = .{
                         .data = options.window_buffer,
                         .write_index = 0,
@@ -189,7 +187,7 @@ pub const btrstd = struct {
             }
 
             pub fn read(self: *Self, buffer: []u8) Error!usize {
-                const dest = buffer[0..@min(buffer.len, self.available_bytes)];
+                const dest = buffer[0..@min(buffer.len, self.available_bytes.?)];
                 if (dest.len == 0) return 0;
 
                 var out_buf = zstandart.OutBuffer{
@@ -227,7 +225,7 @@ pub const btrstd = struct {
                     self.buffer.read_index = self.buffer.mask2(self.buffer.read_index + n);
                 }
 
-                self.available_bytes -= out_buf.pos;
+                self.available_bytes.? -= out_buf.pos;
                 return out_buf.pos;
             }
 
@@ -237,7 +235,7 @@ pub const btrstd = struct {
 
             /// Write unread bytes to a ring buffer
             fn fill(self: *Self) !void {
-                const write_len = @min(self.buffer.data.len - len(self), self.unread_bytes);
+                const write_len = @min(self.buffer.data.len - len(self), self.unread_bytes.?);
                 if (write_len == 0) return;
 
                 const slice = self.buffer.sliceAt(self.buffer.write_index, write_len);
@@ -250,7 +248,7 @@ pub const btrstd = struct {
                 }
 
                 self.buffer.write_index = self.buffer.mask2(self.buffer.write_index + n1 + n2);
-                self.unread_bytes -= n1 + n2;
+                self.unread_bytes.? -= n1 + n2;
             }
 
             // idk why ring buffers len() function returns [0; buf_len * 2)

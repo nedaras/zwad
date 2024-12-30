@@ -74,13 +74,14 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         try file_hashes.append(.{ file, hash });
     }
 
-    const Context1 = struct {
-        fn lessThan(_: void, a: PathedHash, b: PathedHash) bool {
-            return a[1] < b[1];
-        }
-    };
-
-    std.sort.block(PathedHash, file_hashes.items, {}, Context1.lessThan);
+    {
+        const Context = struct {
+            fn lessThan(_: void, a: PathedHash, b: PathedHash) bool {
+                return a[1] < b[1];
+            }
+        };
+        std.sort.block(PathedHash, file_hashes.items, {}, Context.lessThan);
+    }
 
     var iter = try wad.header.headerIterator(reader);
     while (try iter.next()) |entry| {
@@ -102,47 +103,42 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     var window_buffer: [1 << 17]u8 = undefined;
     var write_buffer: [1 << 17]u8 = undefined;
 
-    var zstd_stream = try compress.btrstd.decompressor(allocator, reader, .{
-        .window_buffer = &window_buffer,
-        .decompressed_size = undefined,
-        .compressed_size = undefined,
-    });
+    var zstd_stream = try compress.btrstd.decompressor(allocator, reader, .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
     var write_files = std.ArrayList(fs.File).init(allocator);
     defer write_files.deinit();
 
     var bytes_handled: u32 = iter.bytesRead();
-    for (entries.items, 0..) |pathed_entry, i| { // there can be duplicates
+    for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
-        assert(entry.type == .zstd or entry.type == .zstd_multi);
 
         const skip = entry.offset - bytes_handled;
         try reader.skipBytes(skip, .{ .buf_size = 4096 });
 
-        var duplicates_len: usize = 0;
         for (i..entries.items.len) |j| {
             if (entry.offset != entries.items[j][1].offset) break;
-            duplicates_len += 1;
+            const file = try makeFile(fs.cwd(), entries.items[j][0]);
+            try write_files.append(file);
+        }
+        defer {
+            for (write_files.items) |file| file.close();
+            write_files.items.len = 0;
         }
 
-        try write_files.ensureTotalCapacity(duplicates_len);
-        write_files.items.len = duplicates_len;
-
-        for (write_files.items, 0..) |*file, j| file.* = makeFile(fs.cwd(), path) catch |err| {
-            for (0..j) |x| {
-                write_files.items[x].close();
-            }
-            return err;
-        };
-        defer for (write_files.items) |file| file.close();
-
-        zstd_stream.available_bytes = entry.decompressed_len;
-        zstd_stream.unread_bytes = entry.compressed_len;
+        if (entry.type == .zstd or entry.type == .zstd_multi) {
+            zstd_stream.available_bytes = entry.decompressed_len;
+            zstd_stream.unread_bytes = entry.compressed_len;
+        }
 
         var amt: usize = 0;
         while (true) {
-            const n = try zstd_stream.read(&write_buffer);
+            const dest = write_buffer[0..@min(write_buffer.len, entry.decompressed_len - amt)];
+            const n = switch (entry.type) {
+                .raw => try reader.read(dest),
+                .zstd, .zstd_multi => try zstd_stream.read(dest),
+                else => @panic("not implemented"),
+            };
             if (n == 0) break;
 
             for (write_files.items) |file| {
