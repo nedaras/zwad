@@ -39,70 +39,42 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
             decompressor: ?union(enum) {
                 none: ReaderType,
-                zstd: compress.zstd.Decompressor(ReaderType).Reader,
+                zstd: *compress.zstd.Decompressor(ReaderType),
             },
 
+            // todo: find a way to make this work
             unread_bytes: *u32,
             available_bytes: *u32,
-
-            cache: *compress.WindowBuffer,
 
             pub const Error = compress.zstd.Decompressor(ReaderType).Error;
             pub const Reader = io.Reader(Entry, Error, read);
 
-            pub fn read(entry: Entry, buffer: []u8) Error!usize { // todo: assert if trying to read duplicate on invalid options
+            pub fn read(entry: Entry, buffer: []u8) Error!usize {
                 if (entry.decompressor == null) @panic("reading from duplicate when option `handle_duplicates` is set to false");
+                if (buffer.len == 0) return 0;
 
                 const dest = buffer[0..@min(buffer.len, entry.available_bytes.*)];
                 if (dest.len == 0) return 0;
 
-                var input_amt: u32 = 0;
-                var output_amt: u32 = 0;
-                var flag = false;
-
-                const cached_bytes = entry.cache.unread_len;
-                switch (entry.decompressor.?) {
+                return switch (entry.decompressor.?) {
                     .none => |stream| {
-                        if (cached_bytes == 0) {
-                            const amt: u32 = @intCast(try stream.read(dest));
-                            output_amt += amt;
-                            input_amt += amt;
-                        } else {
-                            const copy_len: u32 = @intCast(@min(cached_bytes, dest.len));
-                            if (copy_len != dest.len) {
-                                const amt: u32 = @intCast(try stream.read(dest[copy_len..]));
-                                input_amt += amt;
-                                output_amt += amt;
-                            }
-                            @memcpy(dest[0..copy_len], entry.cache.data[entry.cache.unread_index .. entry.cache.unread_index + copy_len]);
+                        const n: u32 = @intCast(try stream.read(dest));
 
-                            input_amt += copy_len;
-                            output_amt += copy_len;
+                        entry.unread_bytes.* -= n;
+                        entry.available_bytes.* -= n;
 
-                            entry.cache.unread_index += copy_len;
-                            entry.cache.unread_len -= copy_len;
-                        }
+                        return n;
                     },
-                    .zstd => |zstd_stream| {
-                        const amt: u32 = @intCast(try zstd_stream.read(dest));
+                    .zstd => |zstd| {
+                        const n = try zstd.read(dest);
 
-                        output_amt += amt;
-                        flag = amt == 0;
+                        // todo: this is wrong, cuz idk need to check
+                        entry.unread_bytes.* = @intCast(zstd.unread_bytes.?);
+                        entry.available_bytes.* -= @intCast(n);
 
-                        if (cached_bytes == 0) {
-                            input_amt += @intCast(entry.cache.unread_index);
-                        } else input_amt += @intCast(cached_bytes - entry.cache.unread_len);
+                        return n;
                     },
-                }
-
-                entry.unread_bytes.* -= input_amt;
-                entry.available_bytes.* -= output_amt;
-
-                if (flag and entry.unread_bytes.* > 0) {
-                    return read(entry, buffer);
-                }
-
-                return output_amt;
+                };
             }
 
             pub fn duplicate(entry: Entry) bool {
@@ -177,30 +149,20 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                         .decompressor = null,
                         .unread_bytes = &self.unread_file_bytes,
                         .available_bytes = &self.available_file_bytes,
-                        .cache = &self.zstd.buffer,
                     };
                 }
 
                 const skip = entry.offset - prev_entry.offset - prev_entry.compressed_len + self.unread_file_bytes;
-                if (skip > 0) {
-                    // todo: reset zstd state if just half of data was read or smth
-                    const skip_cache = @min(self.zstd.unreadBytes(), skip);
-                    const skip_raw = skip - skip_cache;
-
-                    self.zstd.buffer.unread_index += skip_cache;
-                    self.zstd.buffer.unread_len -= skip_cache;
-
-                    if (skip_raw > 0) {
-                        // @setCold(true);
-                        try self.reader.skipBytes(skip_raw, .{});
-                    }
-                    self.unread_file_bytes = 0;
-                }
+                if (skip > 0) try self.reader.skipBytes(skip, .{});
             }
 
             self.unread_file_bytes = entry.compressed_len;
             self.available_file_bytes = entry.decompressed_len;
-            self.zstd.completed = false;
+
+            if (entry.type == .zstd or entry.type == .zstd_multi) {
+                self.zstd.unread_bytes = self.unread_file_bytes;
+                self.zstd.available_bytes = self.available_file_bytes;
+            }
 
             return .{
                 .hash = entry.hash,
@@ -208,12 +170,11 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 .decompressed_len = entry.decompressed_len,
                 .decompressor = switch (entry.type) {
                     .raw => .{ .none = self.reader },
-                    .zstd, .zstd_multi => .{ .zstd = self.zstd.reader() },
+                    .zstd, .zstd_multi => .{ .zstd = &self.zstd },
                     else => @panic("not implemented"),
                 },
                 .unread_bytes = &self.unread_file_bytes,
                 .available_bytes = &self.available_file_bytes,
-                .cache = &self.zstd.buffer,
             };
         }
 

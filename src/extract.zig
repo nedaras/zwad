@@ -84,16 +84,15 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         std.sort.block(PathedHash, file_hashes.items, {}, Context.lessThan);
     }
 
-    var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
-        error.InvalidFile, error.EndOfStream => {
-            logger.println("This does not look like a wad archive", .{});
-            return error.Fatal;
-        },
-        error.UnknownVersion => error.Outdated,
-        else => |e| {
-            logger.println("Unexpected read error: {s}", .{errors.stringify(e)});
-            return handled.fatal(e);
-        },
+    // todo: add this unexpected error handling message everywhere
+    var iter = wad.header.headerIterator(reader) catch |err| return {
+        switch (err) {
+            error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
+            error.UnknownVersion => return error.Outdated,
+            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+        }
+        return handled.fatal(err);
     };
 
     while (iter.next()) |mb| {
@@ -123,7 +122,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     var window_buffer: [1 << 17]u8 = undefined;
     var write_buffer: [1 << 17]u8 = undefined;
 
-    var zstd_stream = try compress.btrstd.decompressor(allocator, reader, .{ .window_buffer = &window_buffer });
+    var zstd_stream = try compress.zstd.decompressor(allocator, reader, .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
     var write_files = std.ArrayList(fs.File).init(allocator);
@@ -277,7 +276,6 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             }
             continue;
         }
-        std.debug.print("dec_len: {d}, comp_len: {d}\n", .{ entry.decompressed_len, entry.compressed_len });
         if (game_hashes) |h| {
             path = h.get(entry.hash) catch {
                 logger.println("This hashes file seems to be corrupted", .{});
