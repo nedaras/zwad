@@ -39,11 +39,7 @@ pub const zstd = struct {
                 self.* = undefined;
             }
 
-            pub const Error = ReaderType.Error || error{
-                MalformedFrame,
-                MalformedBlock,
-                Unexpected,
-            };
+            pub const Error = ReaderType.Error || zstandart.DecompressStreamError;
 
             pub const Reader = io.Reader(*Self, Error, read);
 
@@ -74,10 +70,7 @@ pub const zstd = struct {
                         self.buffer.unread_len -= in_buf.pos;
                     }
 
-                    const amt = zstandart.decompressStream(self.handle, &in_buf, &out_buf) catch |err| switch (err) {
-                        error.NoSpaceLeft => unreachable,
-                        else => |e| return e,
-                    };
+                    const amt = try zstandart.decompressStream(self.handle, &in_buf, &out_buf);
                     if (amt == 0) self.completed = true;
 
                     return out_buf.pos;
@@ -97,10 +90,7 @@ pub const zstd = struct {
                         self.buffer.unread_len = data_len - in_buf.pos;
                     }
 
-                    const amt = zstandart.decompressStream(self.handle, &in_buf, &out_buf) catch |err| switch (err) {
-                        error.NoSpaceLeft => unreachable,
-                        else => |e| return e,
-                    };
+                    const amt = try zstandart.decompressStream(self.handle, &in_buf, &out_buf);
 
                     if (amt == 0) {
                         self.completed = true;

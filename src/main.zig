@@ -100,7 +100,7 @@ pub fn main_generate_hashes() !void {
 }
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
-pub fn main() !void {
+pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
@@ -111,7 +111,7 @@ pub fn main() !void {
 
     return switch (args.operation) {
         .list => handle(list(args.options)),
-        .extract => try extract(allocator, args.options, args.files),
+        .extract => handle(extract(allocator, args.options, args.files)),
     };
 }
 

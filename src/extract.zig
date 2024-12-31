@@ -19,7 +19,7 @@ const is_windows = builtin.os.tag == .windows;
 const Entry = wad.header.Entry;
 const assert = std.debug.assert;
 
-pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) !void {
+pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
     const Error = fs.File.Reader.Error || error{EndOfStream};
 
     if (options.file == null) {
@@ -48,7 +48,7 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
     try extractAll(allocator, castedReader(Error, &fbs), options);
 }
 
-fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: []const []const u8) !void {
+fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: []const []const u8) HandleError!void {
     assert(options.directory == null);
     if (files.len == 0) return;
 
@@ -60,6 +60,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 
     const writer = bw.writer();
 
+    // mb move all this to a function idk
     var file_hashes = std.ArrayList(PathedHash).init(allocator);
     defer file_hashes.deinit();
 
@@ -83,14 +84,33 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         std.sort.block(PathedHash, file_hashes.items, {}, Context.lessThan);
     }
 
-    var iter = try wad.header.headerIterator(reader);
-    while (try iter.next()) |entry| {
+    var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
+        error.InvalidFile, error.EndOfStream => {
+            logger.println("This does not look like a wad archive", .{});
+            return error.Fatal;
+        },
+        error.UnknownVersion => error.Outdated,
+        else => |e| {
+            logger.println("Unexpected read error: {s}", .{errors.stringify(e)});
+            return handled.fatal(e);
+        },
+    };
+
+    while (iter.next()) |mb| {
+        const entry = mb orelse break;
         if (entries.items.len == file_hashes.items.len) break;
 
         const path, const hash = file_hashes.items[entries.items.len];
         if (entry.hash == hash) {
             try entries.append(.{ path, entry });
         }
+    } else |err| {
+        switch (err) {
+            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
+            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+        }
+        return handled.fatal(err);
     }
 
     const Context = struct {
@@ -114,11 +134,23 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         const path, const entry = pathed_entry;
 
         const skip = entry.offset - bytes_handled;
-        try reader.skipBytes(skip, .{ .buf_size = 4096 });
+        reader.skipBytes(skip, .{ .buf_size = 4096 }) catch |err| {
+            bw.flush() catch return;
+            switch (err) {
+                error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+            }
+            return handled.fatal(err);
+        };
 
         for (i..entries.items.len) |j| {
             if (entry.offset != entries.items[j][1].offset) break;
-            const file = try makeFile(fs.cwd(), entries.items[j][0]);
+            const entry_path = entries.items[j][0];
+            const file = makeFile(fs.cwd(), entry_path) catch |err| {
+                bw.flush() catch return;
+                logger.println("{s}: Cannot make: {s}", .{ entry_path, errors.stringify(err) });
+                return handled.fatal(err);
+            };
             try write_files.append(file);
         }
         defer {
@@ -135,14 +167,31 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         while (true) {
             const dest = write_buffer[0..@min(write_buffer.len, entry.decompressed_len - amt)];
             const n = switch (entry.type) {
-                .raw => try reader.read(dest),
-                .zstd, .zstd_multi => try zstd_stream.read(dest),
+                .raw => reader.read(dest),
+                .zstd, .zstd_multi => zstd_stream.read(dest),
                 else => @panic("not implemented"),
+            } catch |err| {
+                bw.flush() catch return;
+                switch (err) {
+                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                    error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                    else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+                }
+                return handled.fatal(err);
             };
+
             if (n == 0) break;
 
-            for (write_files.items) |file| {
-                try file.writeAll(write_buffer[0..n]);
+            for (write_files.items, 0..) |file, j| {
+                file.writeAll(write_buffer[0..n]) catch |err| {
+                    const entry_path = entries.items[i + j][0];
+                    switch (err) {
+                        error.LockViolation => unreachable, // no lock
+                        error.InvalidArgument => unreachable,
+                        else => |e| logger.println("{s}: Cannot write: {s}", .{ entry_path, errors.stringify(e) }),
+                    }
+                    return handled.fatal(err);
+                };
             }
 
             amt += n;
@@ -272,7 +321,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     bw.flush() catch return;
 }
 
-fn DiagnosticsError(comptime ReaderType: type) type {
+fn DiagnosticsError(comptime ReaderType: type) type { // This thing is just goofy
     return union(enum) {
         make: MakeFileError,
         map: error{
@@ -300,6 +349,10 @@ fn DiagnosticsError(comptime ReaderType: type) type {
             FileTooBig,
             NoSpaceLeft,
             DiskQuota,
+            FileDescriptorNotASocket,
+            MessageTooBig,
+            NetworkUnreachable,
+            NetworkSubsystemFailed,
             NotOpenForWriting,
         },
 
@@ -385,7 +438,6 @@ pub fn copyFile(source_dir: fs.Dir, source_path: []const u8, dest_dir: fs.Dir, d
                         error.PermissionDenied => return error.AccessDenied,
                         error.InvalidArgument => unreachable,
                         error.LockViolation, error.FileLocksNotSupported => unreachable,
-                        error.FileDescriptorNotASocket, error.MessageTooBig, error.NetworkUnreachable, error.NetworkSubsystemFailed => unreachable,
                         else => |x| x,
                     };
                 }
@@ -395,7 +447,6 @@ pub fn copyFile(source_dir: fs.Dir, source_path: []const u8, dest_dir: fs.Dir, d
             error.PermissionDenied => return error.AccessDenied,
             error.InvalidArgument, error.FileLocksNotSupported => unreachable, // i think zig should handle this before hand
             error.LockViolation => unreachable, // idk why zig left this error
-            error.FileDescriptorNotASocket, error.MessageTooBig, error.NetworkUnreachable, error.NetworkSubsystemFailed => unreachable, // Not doing any networking
             else => |e| return e,
         }
     };
