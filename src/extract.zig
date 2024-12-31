@@ -250,6 +250,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     };
     defer iter.deinit();
 
+    // todo: handle duplicates like writing to multiple files
     while (iter.next()) |mb| {
         const entry = mb orelse break;
         if (entry.duplicate()) {
@@ -262,7 +263,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
                     return error.Fatal;
                 } orelse std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
             } else {
-                new_path = std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+                new_path = std.fmt.bufPrint(&new_path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
             }
 
             copyFile(out_dir, path, out_dir, new_path, .{}) catch |err| {
@@ -276,13 +277,14 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             }
             continue;
         }
+        // todo: add magic?
         if (game_hashes) |h| {
             path = h.get(entry.hash) catch {
                 logger.println("This hashes file seems to be corrupted", .{});
                 return error.Fatal;
             } orelse std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         } else {
-            path = std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
+            path = std.fmt.bufPrint(&path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
