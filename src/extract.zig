@@ -56,11 +56,9 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     const PathedHash = struct { []const u8, u64 };
 
     const stdout = std.io.getStdOut();
-    var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+    // unleast we add patterns for extracting file like `assets/*` i do not see a good enough reason to buffer stdout
+    const writer = stdout.writer();
 
-    const writer = bw.writer();
-
-    // mb move all this to a function idk
     var file_hashes = std.ArrayList(PathedHash).init(allocator);
     defer file_hashes.deinit();
 
@@ -84,15 +82,11 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         std.sort.block(PathedHash, file_hashes.items, {}, Context.lessThan);
     }
 
-    // todo: add this unexpected error handling message everywhere
-    var iter = wad.header.headerIterator(reader) catch |err| return {
-        switch (err) {
-            error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
-            error.UnknownVersion => return error.Outdated,
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
+    var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
+        error.UnknownVersion => return error.Outdated,
+        error.InvalidFile, error.EndOfStream => logger.fatal("This does not look like a wad archive", .{}),
+        error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+        else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
     };
 
     while (iter.next()) |mb| {
@@ -103,15 +97,12 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         if (entry.hash == hash) {
             try entries.append(.{ path, entry });
         }
-    } else |err| {
-        switch (err) {
-            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
-            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
-    }
+    } else |err| return switch (err) {
+        error.InvalidFile => logger.fatal("This archive seems to be corrupted", .{}),
+        error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
+        error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+        else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
+    };
 
     const Context = struct {
         fn lessThan(_: void, a: PathedEntry, b: PathedEntry) bool {
@@ -133,30 +124,28 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
 
+        // i dont like this skip part
         var skip = entry.offset - bytes_handled;
         while (skip > 0) {
-            const n = reader.read(write_buffer[0..@min(write_buffer.len, skip)]) catch |err| {
-                switch (err) {
-                    error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-                    else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
-                }
-                return handled.fatal(err);
+            const n = reader.read(write_buffer[0..@min(write_buffer.len, skip)]) catch |err| return switch (err) {
+                error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+                else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
             };
+
             if (n == 0) {
                 logger.println("Unexpected EOF in archive", .{});
                 return error.Fatal;
             }
+
             skip -= @intCast(n);
         }
 
         for (i..entries.items.len) |j| {
             if (entry.offset != entries.items[j][1].offset) break;
+
             const entry_path = entries.items[j][0];
-            const file = makeFile(fs.cwd(), entry_path) catch |err| {
-                bw.flush() catch return;
-                logger.println("{s}: Cannot make: {s}", .{ entry_path, errors.stringify(err) });
-                return handled.fatal(err);
-            };
+            const file = makeFile(fs.cwd(), entry_path) catch |err| return logger.errprint(err, "{s}: Cannot make", .{entry_path});
+
             try write_files.append(file);
         }
         defer {
@@ -176,25 +165,19 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
                 .raw => reader.readNoEof(buf),
                 .zstd, .zstd_multi => zstd_stream.reader().readNoEof(buf),
                 else => @panic("not implemented"),
-            } catch |err| {
-                bw.flush() catch return;
-                switch (err) {
-                    error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
-                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                    else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
-                }
-                return handled.fatal(err);
+            } catch |err| return switch (err) {
+                error.MalformedFrame, error.MalformedBlock => logger.fatal("This archive seems to be corrupted", .{}),
+                error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
+                error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+                else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
             };
 
             for (write_files.items, 0..) |file, j| {
-                file.writeAll(buf) catch |err| {
-                    const entry_path = entries.items[i + j][0];
-                    switch (err) {
-                        error.LockViolation => unreachable, // no lock
-                        error.InvalidArgument => unreachable,
-                        else => |e| logger.println("{s}: Cannot write: {s}", .{ entry_path, errors.stringify(e) }),
-                    }
-                    return handled.fatal(err);
+                const entry_path = entries.items[i + j][0];
+                file.writeAll(buf) catch |err| return switch (err) {
+                    error.LockViolation => unreachable, // no lock
+                    error.InvalidArgument => unreachable,
+                    else => |e| logger.errprint(e, "{s}: Cannot write", .{entry_path}),
                 };
             }
 
@@ -209,8 +192,6 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 
         bytes_handled += skip + entry.compressed_len;
     }
-
-    bw.flush() catch return;
 }
 
 // how anytype works it just makes two huge extract all functions, i think we can reduce it to just one call
@@ -218,16 +199,14 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 // we can use like AnyReader but with typed errors
 fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleError!void {
     assert(options.directory != null);
+    const dir = options.directory.?;
 
     const stdout = std.io.getStdOut();
     var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
 
     const writer = bw.writer();
 
-    var out_dir = fs.cwd().openDir(options.directory.?, .{}) catch |err| {
-        logger.println("{s}: Cannot open: {s}", .{ options.directory.?, errors.stringify(err) });
-        return handled.fatal(err);
-    };
+    var out_dir = fs.cwd().openDir(dir, .{}) catch |err| return logger.errprint(err, "{s}: Cannot open", .{dir});
     defer out_dir.close();
 
     const hashes_map = if (options.hashes) |h| try handled.map(fs.cwd(), h, .{}) else null;
@@ -244,15 +223,12 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     var iter = wad.streamIterator(allocator, reader, .{
         .handle_duplicates = false,
         .window_buffer = &window_buf,
-    }) catch |err| {
-        switch (err) {
-            error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            error.UnknownVersion => return error.Outdated,
-            error.OutOfMemory => return error.OutOfMemory,
-            else => |e| logger.println("{s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
+    }) catch |err| return switch (err) {
+        error.UnknownVersion => return error.Outdated,
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidFile, error.EndOfStream => logger.fatal("This does not look like a wad archive", .{}),
+        error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+        else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
     };
     defer iter.deinit();
 
@@ -264,9 +240,10 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             var new_path: []const u8 = undefined;
 
             if (game_hashes) |h| {
+                // todo: add lambda that would flush automaticly
                 new_path = h.get(entry.hash) catch {
-                    logger.println("This hashes file seems to be corrupted", .{});
-                    return error.Fatal;
+                    bw.flush() catch return;
+                    return logger.fatal("This hashes file seems to be corrupted", .{});
                 } orelse std.fmt.bufPrint(&new_path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
             } else {
                 new_path = std.fmt.bufPrint(&new_path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
@@ -274,8 +251,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
 
             copyFile(out_dir, path, out_dir, new_path, .{}) catch |err| {
                 bw.flush() catch return;
-                logger.println("{s}: Cannot copy '{s}': {s}", .{ new_path, path, errors.stringify(err) });
-                return handled.fatal(err);
+                return logger.errprint(err, "{s}: Cannot copy '{s}'", .{ new_path, path });
             };
 
             if (options.verbose) {
@@ -286,8 +262,8 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         // todo: add magic?
         if (game_hashes) |h| {
             path = h.get(entry.hash) catch {
-                logger.println("This hashes file seems to be corrupted", .{});
-                return error.Fatal;
+                bw.flush() catch return;
+                return logger.fatal("This hashes file seems to be corrupted", .{});
             } orelse std.fmt.bufPrint(&path_buf, "_unk/{x:0>16}", .{entry.hash}) catch unreachable;
         } else {
             path = std.fmt.bufPrint(&path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
@@ -309,12 +285,12 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             const buf = write_buffer[0..@min(write_buffer.len, write_len)];
             entry.reader().readNoEof(buf) catch |err| {
                 bw.flush() catch return;
-                switch (err) {
-                    error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
-                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                    else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
-                }
-                return handled.fatal(err);
+                return switch (err) {
+                    error.MalformedFrame, error.MalformedBlock => logger.fatal("This archive seems to be corrupted", .{}),
+                    error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
+                    error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+                    else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
+                };
             };
 
             write_file.writeAll(buf) catch |err| switch (err) {
@@ -336,13 +312,12 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         }
     } else |err| {
         bw.flush() catch return;
-        switch (err) {
-            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
-            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
+        return switch (err) {
+            error.InvalidFile => logger.fatal("This archive seems to be corrupted", .{}),
+            error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
+            error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
+        };
     }
 
     bw.flush() catch return;

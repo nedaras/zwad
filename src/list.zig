@@ -80,13 +80,12 @@ fn _list(reader: anytype, options: Options) HandleError!void {
         writer.print("{x:0>16}\n", .{entry.hash}) catch return;
     } else |err| {
         bw.flush() catch return;
-        switch (err) {
-            error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
-            error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
+        return switch (err) {
+            error.InvalidFile => logger.fatal("This archive seems to be corrupted", .{}),
+            error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
+            error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
+        };
     }
 
     bw.flush() catch return;
