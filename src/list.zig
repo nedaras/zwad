@@ -48,14 +48,11 @@ fn _list(reader: anytype, options: Options) HandleError!void {
 
     const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
 
-    var iter = wad.header.headerIterator(reader) catch |err| return {
-        switch (err) {
-            error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
-            error.UnknownVersion => return error.Outdated,
-            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
-        }
-        return handled.fatal(err);
+    var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
+        error.UnknownVersion => return error.Outdated,
+        error.InvalidFile, error.EndOfStream => logger.fatal("This does not look like a wad archive", .{}),
+        error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
+        else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
     };
 
     while (iter.next()) |me| {

@@ -90,7 +90,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             error.InvalidFile, error.EndOfStream => logger.println("This does not look like a wad archive", .{}),
             error.UnknownVersion => return error.Outdated,
             error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
         }
         return handled.fatal(err);
     };
@@ -200,6 +200,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 
             write_len -= @intCast(buf.len);
         }
+        assert(write_len == 0);
 
         if (options.verbose) {
             writer.writeAll(path) catch return;
@@ -237,7 +238,9 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     var path_buf: [21]u8 = undefined;
     var path: []const u8 = undefined;
 
+    var write_buffer: [1 << 17]u8 = undefined;
     var window_buf: [1 << 17]u8 = undefined;
+
     var iter = wad.streamIterator(allocator, reader, .{
         .handle_duplicates = false,
         .window_buffer = &window_buf,
@@ -256,7 +259,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     // todo: handle duplicates like writing to multiple files
     while (iter.next()) |mb| {
         const entry = mb orelse break;
-        if (entry.duplicate()) {
+        if (entry.duplicate()) { // delete this tingy
             var new_path_buf: [21]u8 = undefined;
             var new_path: []const u8 = undefined;
 
@@ -290,27 +293,46 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             path = std.fmt.bufPrint(&path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
-        // hate all of this
-        if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
+        const write_file = makeFile(out_dir, path) catch |err| blk: {
             bw.flush() catch return;
-            if (diagnostics == .make) switch (diagnostics.make) {
-                error.NameTooLong, error.BadPathName => {
-                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(diagnostics.make) });
-                    path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
+            logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
+            if (err == error.BadPathName or err == error.NameTooLong) {
+                path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
+                break :blk makeFile(out_dir, path) catch |e| return logger.errprint(e, "{s}: Cannot make", .{path});
+            }
+            return handled.fatal(err);
+        };
+        defer write_file.close();
 
-                    if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diag| {
-                        return diag.handle(path);
-                    } else {
-                        break :blk;
-                    }
-                },
-                else => {},
+        var write_len: usize = entry.decompressed_len;
+        while (write_len != 0) {
+            const buf = write_buffer[0..@min(write_buffer.len, write_len)];
+            entry.reader().readNoEof(buf) catch |err| {
+                bw.flush() catch return;
+                switch (err) {
+                    error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
+                    else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+                }
+                return handled.fatal(err);
             };
-            return diagnostics.handle(path);
+
+            write_file.writeAll(buf) catch |err| switch (err) {
+                error.LockViolation => unreachable, // no lock
+                error.InvalidArgument => unreachable,
+                else => |e| {
+                    bw.flush() catch return;
+                    return logger.errprint(e, "{s}: Cannot write", .{path});
+                },
+            };
+
+            write_len -= @intCast(buf.len);
         }
+        assert(write_len == 0);
 
         if (options.verbose) {
-            writer.print("{s}\n", .{path}) catch return;
+            writer.writeAll(path) catch return;
+            writer.writeByte('\n') catch return;
         }
     } else |err| {
         bw.flush() catch return;
@@ -324,97 +346,6 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     }
 
     bw.flush() catch return;
-}
-
-fn DiagnosticsError(comptime ReaderType: type) type { // This thing is just goofy
-    return union(enum) {
-        make: MakeFileError,
-        map: error{
-            AccessDenied,
-            IsDir,
-            SystemResources,
-            SharingViolation,
-            ProcessFdQuotaExceeded,
-            SystemFdQuotaExceeded,
-            NoSpaceLeft,
-            Unseekable,
-            Unexpected,
-        },
-        read: (error{EndOfStream} || ReaderType.Error),
-        write: error{
-            Unexpected,
-            AccessDenied,
-            InputOutput,
-            SystemResources,
-            OperationAborted,
-            BrokenPipe,
-            ConnectionResetByPeer,
-            WouldBlock,
-            DeviceBusy,
-            FileTooBig,
-            NoSpaceLeft,
-            DiskQuota,
-            FileDescriptorNotASocket,
-            MessageTooBig,
-            NetworkUnreachable,
-            NetworkSubsystemFailed,
-            NotOpenForWriting,
-        },
-
-        fn handle(self: @This(), path: []const u8) HandleError {
-            switch (self) {
-                .make => |err| {
-                    logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
-                    return handled.fatal(err);
-                },
-                .map => |err| {
-                    logger.println("{s}: Cannot map: {s}", .{ path, errors.stringify(err) });
-                    return handled.fatal(err);
-                },
-                .read => |err| {
-                    switch (err) {
-                        error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                        error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
-                        error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
-                        else => |e| logger.println("{s}", .{errors.stringify(e)}),
-                    }
-                    return handled.fatal(err);
-                },
-                .write => |err| {
-                    logger.println("{s}: Cannot write: {s}", .{ path, errors.stringify(err) });
-                    return handled.fatal(err);
-                },
-            }
-        }
-    };
-}
-
-const WriteOptions = struct {
-    dir: ?fs.Dir = null,
-    size: u32,
-};
-
-fn writeFile(sub_path: []const u8, reader: anytype, options: WriteOptions) ?DiagnosticsError(@TypeOf(reader)) {
-    const file = makeFile(options.dir orelse fs.cwd(), sub_path) catch |err| return .{ .make = err };
-    defer file.close();
-
-    // writting in chunks seems to be faster after all
-    // and with big buffers like these it most of the times is only one sys call
-    var amt: u32 = 0;
-    var buf: [1 << 17]u8 = undefined;
-    while (options.size > amt) {
-        const slice = buf[0..@min(buf.len, options.size - amt)];
-        reader.readNoEof(slice) catch |err| return .{ .read = err };
-        amt += @intCast(slice.len);
-
-        file.writeAll(slice) catch |err| return switch (err) {
-            error.LockViolation => unreachable, //  no lock
-            error.InvalidArgument => unreachable,
-            else => |e| .{ .write = e },
-        };
-    }
-
-    return null;
 }
 
 const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;

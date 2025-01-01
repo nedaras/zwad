@@ -100,6 +100,7 @@ pub fn main_generate_hashes() !void {
 }
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
+// todo: we need a way to test our application fuzzing would be the best way
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
