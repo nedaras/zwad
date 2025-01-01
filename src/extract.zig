@@ -20,7 +20,7 @@ const Entry = wad.header.Entry;
 const assert = std.debug.assert;
 
 pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
-    const Error = fs.File.Reader.Error || error{EndOfStream};
+    const Error = fs.File.Reader.Error;
 
     if (options.file == null) {
         const stdin = io.getStdIn();
@@ -107,7 +107,8 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
         }
         return handled.fatal(err);
     }
@@ -132,15 +133,21 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
 
-        const skip = entry.offset - bytes_handled;
-        reader.skipBytes(skip, .{ .buf_size = 4096 }) catch |err| {
-            bw.flush() catch return;
-            switch (err) {
-                error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-                else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+        var skip = entry.offset - bytes_handled;
+        while (skip > 0) {
+            const n = reader.read(write_buffer[0..@min(write_buffer.len, skip)]) catch |err| {
+                switch (err) {
+                    error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+                    else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
+                }
+                return handled.fatal(err);
+            };
+            if (n == 0) {
+                logger.println("Unexpected EOF in archive", .{});
+                return error.Fatal;
             }
-            return handled.fatal(err);
-        };
+            skip -= @intCast(n);
+        }
 
         for (i..entries.items.len) |j| {
             if (entry.offset != entries.items[j][1].offset) break;
@@ -162,27 +169,25 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             zstd_stream.unread_bytes = entry.compressed_len;
         }
 
-        var amt: usize = 0;
-        while (true) {
-            const dest = write_buffer[0..@min(write_buffer.len, entry.decompressed_len - amt)];
-            const n = switch (entry.type) {
-                .raw => reader.read(dest),
-                .zstd, .zstd_multi => zstd_stream.read(dest),
+        var write_len: usize = entry.decompressed_len;
+        while (write_len != 0) {
+            const buf = write_buffer[0..@min(write_buffer.len, write_len)];
+            _ = switch (entry.type) {
+                .raw => reader.readNoEof(buf),
+                .zstd, .zstd_multi => zstd_stream.reader().readNoEof(buf),
                 else => @panic("not implemented"),
             } catch |err| {
                 bw.flush() catch return;
                 switch (err) {
-                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
                     error.MalformedFrame, error.MalformedBlock => logger.println("This archive seems to be corrupted", .{}),
+                    error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
                     else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
                 }
                 return handled.fatal(err);
             };
 
-            if (n == 0) break;
-
             for (write_files.items, 0..) |file, j| {
-                file.writeAll(write_buffer[0..n]) catch |err| {
+                file.writeAll(buf) catch |err| {
                     const entry_path = entries.items[i + j][0];
                     switch (err) {
                         error.LockViolation => unreachable, // no lock
@@ -193,10 +198,8 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
                 };
             }
 
-            amt += n;
+            write_len -= @intCast(buf.len);
         }
-
-        assert(amt == entry.decompressed_len);
 
         if (options.verbose) {
             writer.writeAll(path) catch return;
@@ -287,6 +290,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             path = std.fmt.bufPrint(&path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
+        // hate all of this
         if (writeFile(path, entry.reader(), .{ .dir = out_dir, .size = entry.decompressed_len })) |diagnostics| blk: {
             bw.flush() catch return;
             if (diagnostics == .make) switch (diagnostics.make) {
@@ -313,7 +317,8 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            else => |e| logger.println("{s}", .{errors.stringify(e)}),
+            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
         }
         return handled.fatal(err);
     }

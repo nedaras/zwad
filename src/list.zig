@@ -13,7 +13,7 @@ const io = std.io;
 const HandleError = handled.HandleError;
 
 pub fn list(options: Options) HandleError!void {
-    const Error = fs.File.Reader.Error || error{EndOfStream};
+    const Error = fs.File.Reader.Error;
 
     if (options.file == null) {
         const stdin = io.getStdIn();
@@ -86,7 +86,8 @@ fn _list(reader: anytype, options: Options) HandleError!void {
         switch (err) {
             error.InvalidFile => logger.println("This archive seems to be corrupted", .{}),
             error.EndOfStream => logger.println("Unexpected EOF in archive", .{}),
-            else => |e| logger.println("Unexpected read error: {s}", .{errors.stringify(e)}),
+            error.Unexpected => logger.println("Unknown error has occurred while extracting this archive", .{}),
+            else => |e| logger.println("Unexpected error has occurred while extracting this archive: {s}", .{errors.stringify(e)}),
         }
         return handled.fatal(err);
     }
