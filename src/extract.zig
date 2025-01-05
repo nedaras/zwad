@@ -7,7 +7,7 @@ const hashes = @import("hashes.zig");
 const handled = @import("handled.zig");
 const Options = @import("cli.zig").Options;
 const logger = @import("logger.zig");
-const magic = @import("/magic.zig");
+const magic = @import("magic.zig");
 const xxhash = @import("xxhash.zig");
 const compress = @import("compress.zig");
 const castedReader = @import("casted_reader.zig").castedReader;
@@ -213,8 +213,9 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     defer if (hashes_map) |h| h.deinit();
 
     const game_hashes = if (hashes_map) |h| hashes.decompressor(h.view) else null;
+    const path_len = 21 + magic.maxExtentionBytes();
 
-    var path_buf: [21]u8 = undefined;
+    var path_buf: [path_len]u8 = undefined;
     var path: []const u8 = undefined;
 
     var write_buffer: [1 << 17]u8 = undefined;
@@ -236,7 +237,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     while (iter.next()) |mb| {
         const entry = mb orelse break;
         if (entry.duplicate()) { // delete this tingy
-            var new_path_buf: [21]u8 = undefined;
+            var new_path_buf: [path_len]u8 = undefined;
             var new_path: []const u8 = undefined;
 
             if (game_hashes) |h| {
