@@ -55,8 +55,8 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     const PathedEntry = struct { []const u8, Entry };
     const PathedHash = struct { []const u8, u64 };
 
-    const stdout = std.io.getStdOut();
     // unleast we add patterns for extracting file like `assets/*` i do not see a good enough reason to buffer stdout
+    const stdout = std.io.getStdOut();
     const writer = stdout.writer();
 
     var file_hashes = std.ArrayList(PathedHash).init(allocator);

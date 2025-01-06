@@ -45,7 +45,7 @@ pub const Entry = struct {
         compressed_len: u32,
         decompressed_len: u32,
         entry_type: EntryType,
-        _: u28 = 0, // padding
+        pad: u28 = 0,
     };
 
     pub const v2 = packed struct {

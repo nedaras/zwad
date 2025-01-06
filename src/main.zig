@@ -7,8 +7,9 @@ const cli = @import("cli.zig");
 const logger = @import("logger.zig");
 const handle = @import("handled.zig").handle;
 const HandleError = @import("handled.zig").HandleError;
-pub const list = @import("list.zig").list;
-pub const extract = @import("extract.zig").extract;
+const list = @import("list.zig").list;
+const extract = @import("extract.zig").extract;
+const create = @import("create.zig").create;
 const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
@@ -101,7 +102,7 @@ pub fn main_generate_hashes() !void {
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 // todo: we need a way to test our application fuzzing would be the best way
-pub fn main() void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
@@ -113,6 +114,7 @@ pub fn main() void {
     return switch (args.operation) {
         .list => handle(list(args.options)),
         .extract => handle(extract(allocator, args.options, args.files)),
+        .create => try create(args.options, args.files),
     };
 }
 

@@ -6,8 +6,11 @@ const io = std.io;
 const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
+pub const output = @import("wad/output.zig");
 pub const header = @import("wad/header.zig");
 pub const EntryType = @import("wad/toc.zig").EntryType;
+
+// todo: after implementing create add pipeToFileSystem function
 
 pub const Options = struct {
     // If it is set to false, then it's callers responsability

@@ -3,8 +3,9 @@ const mem = std.mem;
 const assert = std.debug.assert;
 
 pub const Option = union(enum) {
-    extract: ?[]const u8,
     list: ?[]const u8,
+    extract: ?[]const u8,
+    create: ?[]const u8,
     file: ?[]const u8,
     hashes: ?[]const u8,
     directory: ?[]const u8,
@@ -51,9 +52,10 @@ pub const OptionIterator = struct {
                 self.index = null;
                 return .{ .directory = val };
             },
+            'v' => .{ .verbose = null },
             't' => .{ .list = null },
             'x' => .{ .extract = null },
-            'v' => .{ .verbose = null },
+            'c' => .{ .create = null },
             else => .unknown,
         };
     }
@@ -76,6 +78,7 @@ fn getOptionFromName(slice: []const u8) Option {
     if (mem.eql(u8, key, "list")) return .{ .list = val };
     if (mem.eql(u8, key, "extract")) return .{ .extract = val };
     if (mem.eql(u8, key, "get")) return .{ .extract = val };
+    if (mem.eql(u8, key, "create")) return .{ .create = val };
     if (mem.eql(u8, key, "file")) return .{ .file = val };
     if (mem.eql(u8, key, "hashes")) return .{ .hashes = val };
     if (mem.eql(u8, key, "directory")) return .{ .directory = val };

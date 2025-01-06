@@ -33,6 +33,7 @@ pub const Diagnostics = struct {
 pub const Action = enum {
     extract,
     list,
+    create,
 };
 
 pub const Options = struct {
@@ -122,6 +123,21 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) Allocator.Err
                 }
 
                 operation = .extract;
+            },
+            .create => |val| {
+                if (operation != null) {
+                    try options.diagnostics.errors.append(allocator, .multiple_operations);
+                    continue;
+                }
+
+                if (val != null) {
+                    assert(options_iter.index == null);
+                    const end = arg.len - val.?.len - 1;
+                    try options.diagnostics.errors.append(allocator, .{ .unexpected_argument = .{ .option = arg[2..end] } });
+                    continue;
+                }
+
+                operation = .create;
             },
             .file => |val| {
                 if (val) |v| {
