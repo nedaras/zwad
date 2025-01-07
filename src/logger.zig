@@ -56,7 +56,7 @@ pub fn errprint(err: errors.Error, comptime fmt: []const u8, args: anytype) Hand
 
     bw.writer().writeAll(prefix.?) catch return e;
     bw.writer().print(": " ++ fmt, args) catch return e;
-    bw.writer().print(": {s}", .{errors.stringify(err)}) catch return e;
+    bw.writer().print(": {s}\n", .{errors.stringify(err)}) catch return e;
 
     bw.flush() catch return e;
     return e;

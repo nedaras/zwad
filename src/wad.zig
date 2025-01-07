@@ -208,3 +208,22 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 pub fn streamIterator(allocator: Allocator, reader: anytype, options: Options) !StreamIterator(@TypeOf(reader)) {
     return StreamIterator(@TypeOf(reader)).init(allocator, reader, options);
 }
+
+pub const max_file_size = std.math.maxInt(u32);
+
+pub fn maxArchiveSize(entries: u32) u64 {
+    const toc = @import("wad/toc.zig");
+    return @min(@sizeOf(toc.LatestHeader) + @sizeOf(toc.LatestEntry) * entries, max_file_size) + max_file_size;
+}
+
+fn fixEntriesLen(len: u32) u32 {
+
+}
+
+//pub fn maxBlockSize(entries: u32) u64 {
+// we need to get like how many legit entries we can have
+//}
+
+test "size validation" {
+
+}

@@ -25,3 +25,18 @@ pub const Header = extern struct {
         @panic("idk how");
     }
 };
+
+pub const Entry = extern struct {
+    hash: u64,
+    offset: u32,
+    compressed_len: u32,
+    decompressed_len: u32,
+    pad: [4]u8,
+    checksum: u64,
+
+    pub fn init(offset: u32) Entry {
+        var ret = std.mem.zeroes(Entry);
+        ret.offset = offset;
+        return ret;
+    }
+};
