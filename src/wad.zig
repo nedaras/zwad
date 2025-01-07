@@ -1,6 +1,7 @@
 const std = @import("std");
 const compress = @import("compress.zig");
 const version = @import("wad/version.zig");
+const toc = @import("wad/toc.zig");
 const mem = std.mem;
 const io = std.io;
 const Allocator = mem.Allocator;
@@ -11,6 +12,15 @@ pub const header = @import("wad/header.zig");
 pub const EntryType = @import("wad/toc.zig").EntryType;
 
 // todo: after implementing create add pipeToFileSystem function
+
+pub const max_file_size = std.math.maxInt(u32);
+pub const max_archive_size = max_file_size * 2;
+
+pub const max_entries_len = @divTrunc(max_file_size - @sizeOf(toc.LatestHeader), @sizeOf(toc.LatestEntry));
+
+comptime {
+    assert(max_file_size > max_entries_len * @sizeOf(toc.LatestEntry) + @sizeOf(toc.LatestHeader));
+}
 
 pub const Options = struct {
     // If it is set to false, then it's callers responsability
@@ -207,23 +217,4 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
 pub fn streamIterator(allocator: Allocator, reader: anytype, options: Options) !StreamIterator(@TypeOf(reader)) {
     return StreamIterator(@TypeOf(reader)).init(allocator, reader, options);
-}
-
-pub const max_file_size = std.math.maxInt(u32);
-
-pub fn maxArchiveSize(entries: u32) u64 {
-    const toc = @import("wad/toc.zig");
-    return @min(@sizeOf(toc.LatestHeader) + @sizeOf(toc.LatestEntry) * entries, max_file_size) + max_file_size;
-}
-
-fn fixEntriesLen(len: u32) u32 {
-
-}
-
-//pub fn maxBlockSize(entries: u32) u64 {
-// we need to get like how many legit entries we can have
-//}
-
-test "size validation" {
-
 }

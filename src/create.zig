@@ -21,6 +21,10 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
         estimate_block_size += stat.size;
     }
 
+    std.debug.print("head: {d}\n", .{@sizeOf(@import("wad/toc.zig").LatestHeader)});
+    std.debug.print("entr: {d}\n", .{@sizeOf(@import("wad/toc.zig").LatestEntry)});
+    std.debug.print("max_entries: {d}\n", .{wad.max_entries_len});
+
     _ = allocator;
     _ = writer;
     _ = options;
