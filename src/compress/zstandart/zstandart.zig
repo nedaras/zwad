@@ -3,14 +3,13 @@ const zstd = @import("external.zig");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
+pub const Level = zstd.Level;
 pub const ZSTDError = @import("ZSTDError.zig").ZSTDError;
 pub const UnexpectedError = error{Unexpected};
 
 pub const DecompressStream = zstd.ZSTD_DStream;
 pub const InBuffer = zstd.ZSTD_inBuffer;
 pub const OutBuffer = zstd.ZSTD_outBuffer;
-
-pub const DecompressError = error{Unexpected};
 
 pub const MAX_FRAME_HEADER_BYTES = 18; // magicNumber(4) + frameHeaderMax(14);
 pub const MIN_FRAME_HEADER_BYTES = 6; // magicNumber(4) + frameHeaderMin(2);
@@ -20,7 +19,19 @@ pub const MIN_HEADER_BYTES = MIN_FRAME_HEADER_BYTES + 3; // magicNumber(4) + fra
 
 pub const ZSTD_CONTENTSIZE_UNKNOWN = @as(usize, 0) -% 1;
 
-pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
+pub const DecompressError = error{Unexpected};
+
+pub fn decompress(compressed: []const u8, dist: []u8, level: Level) DecompressError!void {
+    const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len, level);
+    switch (getErrorCode(res)) {
+        .NO_ERROR => {},
+        else => |err| return unexpectedError(err),
+    }
+}
+
+pub const CompressError = error{Unexpected};
+
+pub fn compress(compressed: []const u8, dist: []u8) CompressError!void {
     const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len);
     switch (getErrorCode(res)) {
         .NO_ERROR => {},
@@ -93,8 +104,10 @@ pub const InitDecompressStreamError = error{
     Unexpected,
 };
 
+var used_allocators = std.BoundedArray(Allocator, 8).init(0) catch unreachable;
 var stored_allocator: Allocator = undefined;
 pub fn initDecompressStream(allocator: Allocator) InitDecompressStreamError!*DecompressStream {
+    // allocator.vtable
     if (allocator.vtable == std.heap.c_allocator.vtable) {
         return zstd.ZSTD_createDStream() orelse return error.OutOfMemory;
     }

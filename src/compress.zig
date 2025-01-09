@@ -9,6 +9,10 @@ pub const zstd = struct {
         window_buffer: []u8,
     };
 
+    pub const CompressOptions = struct {
+        level: zstandart.Level = .level_2,
+    };
+
     pub fn Decompressor(comptime ReaderType: type) type {
         return struct {
             source: ReaderType,
@@ -56,9 +60,7 @@ pub const zstd = struct {
 
                 while (out_buf.pos == 0) {
                     try fill(self);
-
                     const slice = self.buffer.sliceAt(self.buffer.read_index, len(self));
-
                     var n: usize = 0;
                     var in_first_buf = zstandart.InBuffer{
                         .src = slice.first.ptr,
@@ -66,11 +68,11 @@ pub const zstd = struct {
                         .pos = 0,
                     };
 
-                    // we need to decompress second part
                     _ = try zstandart.decompressStream(self.inner, &in_first_buf, &out_buf);
                     n += in_first_buf.pos;
 
-                    if (slice.second.len > 0) {
+                    const first_part_handled = in_first_buf.pos == in_first_buf.size;
+                    if (first_part_handled and slice.second.len > 0) {
                         var in_second_buf = zstandart.InBuffer{
                             .src = slice.second.ptr,
                             .size = slice.second.len,
@@ -125,5 +127,23 @@ pub const zstd = struct {
 
     pub fn decompressor(allocator: Allocator, reader: anytype, options: DecompressorOptions) !Decompressor(@TypeOf(reader)) {
         return try Decompressor(@TypeOf(reader)).init(allocator, reader, options);
+    }
+
+    pub fn Compressor(comptime WriterType: type) type {
+        return struct {
+            source: WriterType,
+            unread_bytes: usize = 0,
+
+            const Self = @This();
+
+            pub fn write(self: *Self, buf: []const u8) usize {
+                const slice = buf[0..@min(buf.len, self.unread_bytes)];
+                if (slice.len == 0) return 0;
+            }
+
+            pub inline fn setFrameSize(self: *Self, n: usize) void {
+                self.unread_bytes = n;
+            }
+        };
     }
 };

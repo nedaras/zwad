@@ -166,15 +166,17 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 }
 
                 const skip = entry.offset - prev_entry.offset - prev_entry.compressed_len + self.unread_file_bytes;
-                if (skip > 0) try self.reader.skipBytes(skip, .{});
+                if (skip > 0) {
+                    try self.reader.skipBytes(skip, .{});
+                }
             }
 
             self.unread_file_bytes = entry.compressed_len;
             self.available_file_bytes = entry.decompressed_len;
 
             if (entry.type == .zstd or entry.type == .zstd_multi) {
-                self.zstd.unread_bytes = self.unread_file_bytes;
-                self.zstd.available_bytes = self.available_file_bytes;
+                self.zstd.unread_bytes = entry.compressed_len;
+                self.zstd.available_bytes = entry.decompressed_len;
             }
 
             return .{

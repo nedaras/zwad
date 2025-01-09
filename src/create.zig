@@ -1,5 +1,6 @@
 const std = @import("std");
 const wad = @import("wad.zig");
+const compress = @import("compress.zig");
 const io = std.io;
 const fs = std.fs;
 const math = std.math;
@@ -12,20 +13,21 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
 
     const writer = bw.writer();
 
-    var estimate_block_size: usize = 0;
-    for (files) |file| {
-        // we should start to think about 32bit programs
-        const stat = try fs.cwd().statFile(file);
-        assert(wad.max_file_size >= stat.size);
-        assert(wad.max_file_size * 2 >= estimate_block_size + stat.size);
-        estimate_block_size += stat.size;
+    var block = std.ArrayList(u8).init(allocator);
+    defer block.deinit();
+
+    //std.compress.gzip.compressor(undefined, .{});
+    for (files) |sub_path| {
+        const stat = try fs.cwd().statFile(sub_path);
+        assert(std.math.maxInt(u32) >= stat.size);
+        const file_size = @as(u32, @intCast(stat.size));
+        _ = file_size;
+
+        // we can put in the decompressor file size
+        // and then like stream to it
+
     }
 
-    std.debug.print("head: {d}\n", .{@sizeOf(@import("wad/toc.zig").LatestHeader)});
-    std.debug.print("entr: {d}\n", .{@sizeOf(@import("wad/toc.zig").LatestEntry)});
-    std.debug.print("max_entries: {d}\n", .{wad.max_entries_len});
-
-    _ = allocator;
     _ = writer;
     _ = options;
 

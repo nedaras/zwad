@@ -273,7 +273,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         const write_file = makeFile(out_dir, path) catch |err| blk: {
             bw.flush() catch return;
             logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
-            if (err == error.BadPathName or err == error.NameTooLong) {
+            if (err == error.BadPathName or err == error.NameTooLong or err == error.IsDir) {
                 path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
                 break :blk makeFile(out_dir, path) catch |e| return logger.errprint(e, "{s}: Cannot make", .{path});
             }
@@ -281,7 +281,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         };
         defer write_file.close();
 
-        var write_len: usize = entry.decompressed_len;
+        var write_len: u32 = entry.decompressed_len;
         while (write_len != 0) {
             const buf = write_buffer[0..@min(write_buffer.len, write_len)];
             entry.reader().readNoEof(buf) catch |err| {
