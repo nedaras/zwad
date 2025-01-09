@@ -2,12 +2,15 @@ const std = @import("std");
 const zstd = @import("external.zig");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
+const assert = std.debug.assert;
 
 pub const Level = zstd.Level;
 pub const ZSTDError = @import("ZSTDError.zig").ZSTDError;
 pub const UnexpectedError = error{Unexpected};
 
 pub const DecompressStream = zstd.ZSTD_DStream;
+pub const CompressStream = zstd.ZSTD_CStream;
+
 pub const InBuffer = zstd.ZSTD_inBuffer;
 pub const OutBuffer = zstd.ZSTD_outBuffer;
 
@@ -20,6 +23,8 @@ pub const MIN_HEADER_BYTES = MIN_FRAME_HEADER_BYTES + 3; // magicNumber(4) + fra
 pub const ZSTD_CONTENTSIZE_UNKNOWN = @as(usize, 0) -% 1;
 
 pub const DecompressError = error{Unexpected};
+
+var stored_allocator: ?Allocator = null;
 
 pub fn decompress(compressed: []const u8, dist: []u8, level: Level) DecompressError!void {
     const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len, level);
@@ -104,29 +109,115 @@ pub const InitDecompressStreamError = error{
     Unexpected,
 };
 
-var used_allocators = std.BoundedArray(Allocator, 8).init(0) catch unreachable;
-var stored_allocator: Allocator = undefined;
 pub fn initDecompressStream(allocator: Allocator) InitDecompressStreamError!*DecompressStream {
-    // allocator.vtable
+    assert(stored_allocator == null);
     if (allocator.vtable == std.heap.c_allocator.vtable) {
         return zstd.ZSTD_createDStream() orelse return error.OutOfMemory;
     }
 
     stored_allocator = allocator;
-    return zstd.ZSTD_createDStream_advanced(.{
+    errdefer stored_allocator = null;
+
+    const stream = zstd.ZSTD_createDStream_advanced(.{
         .customAlloc = &alloc,
         .customFree = &free,
-        .@"opaque" = &stored_allocator,
-    }) orelse return error.OutOfMemory;
+        .@"opaque" = &stored_allocator.?,
+    });
+
+    if (stream == null) {
+        return error.OutOfMemory;
+    }
+
+    return stream.?;
 }
 
 pub fn deinitDecompressStream(stream: *DecompressStream) void {
+    assert(stored_allocator != null);
+    defer stored_allocator = null;
+
     const res = zstd.ZSTD_freeDStream(stream);
     return switch (getErrorCode(res)) {
         .NO_ERROR => {},
         else => |err| {
             unexpectedError(err) catch unreachable;
         },
+    };
+}
+
+pub const InitCompressStreamError = error{
+    OutOfMemory,
+    Unexpected,
+};
+
+pub fn initCompressStream(allocator: Allocator) InitCompressStreamError!*CompressStream {
+    assert(stored_allocator == null);
+    if (allocator.vtable == std.heap.c_allocator.vtable) {
+        return zstd.ZSTD_createCStream() orelse return error.OutOfMemory;
+    }
+
+    stored_allocator = allocator;
+    errdefer stored_allocator = null;
+
+    const stream = zstd.ZSTD_createCStream_advanced(.{
+        .customAlloc = &alloc,
+        .customFree = &free,
+        .@"opaque" = &stored_allocator.?,
+    });
+
+    if (stream == null) {
+        return error.OutOfMemory;
+    }
+
+    return stream.?;
+}
+
+pub fn deinitCompressStream(stream: *CompressStream) void {
+    assert(stored_allocator != null);
+    defer stored_allocator = null;
+
+    const res = zstd.ZSTD_freeCStream(stream);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => {},
+        else => |err| {
+            unexpectedError(err) catch unreachable;
+        },
+    };
+}
+
+pub const SetPladgedSizeError = error{
+    Unexpected,
+};
+
+pub fn setPladgedSize(stream: *CompressStream, size: u64) SetPladgedSizeError!void {
+    const res = zstd.ZSTD_CCtx_setPledgedSrcSize(stream, size);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => {},
+        else => |err| unexpectedError(err),
+    };
+}
+
+pub const EndStreamError = error{
+    Unexpected,
+};
+
+pub fn endStream(stream: *CompressStream, out: *OutBuffer) EndStreamError!usize {
+    const res = zstd.ZSTD_endStream(stream, out);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => res,
+        else => |err| unexpectedError(err),
+    };
+}
+
+pub const CompressStreamError = error{
+    Unexpected,
+};
+
+// tood: integrate compressStream2
+pub fn compressStream(stream: *CompressStream, in: *InBuffer, out: *OutBuffer) CompressStreamError!usize {
+    const res = zstd.ZSTD_compressStream(stream, out, in);
+    return switch (getErrorCode(res)) {
+        .NO_ERROR => res,
+        else => |err| unexpectedError(err),
     };
 }
 

@@ -11,6 +11,7 @@ pub const zstd = struct {
 
     pub const CompressOptions = struct {
         level: zstandart.Level = .level_2,
+        window_buffer: []u8,
     };
 
     pub fn Decompressor(comptime ReaderType: type) type {
@@ -132,18 +133,68 @@ pub const zstd = struct {
     pub fn Compressor(comptime WriterType: type) type {
         return struct {
             source: WriterType,
+            inner: *zstandart.CompressStream,
+
+            buffer: []u8,
+
             unread_bytes: usize = 0,
 
             const Self = @This();
 
-            pub fn write(self: *Self, buf: []const u8) usize {
-                const slice = buf[0..@min(buf.len, self.unread_bytes)];
-                if (slice.len == 0) return 0;
+            pub fn init(allocator: Allocator, wt: WriterType, options: CompressOptions) !Self {
+                return .{
+                    .source = wt,
+                    .inner = try zstandart.initCompressStream(allocator),
+                    .buffer = options.window_buffer,
+                };
+            }
+
+            pub fn deinit(self: *Self) void {
+                zstandart.deinitCompressStream(self.inner);
+                self.* = undefined;
+            }
+
+            // tood: ensure that zstd reads whole input, write should compress all the input datacw
+            pub fn write(self: *Self, input: []const u8) !usize {
+                var in_buf = zstandart.InBuffer{
+                    .src = input.ptr,
+                    .size = @min(input.len, self.unread_bytes),
+                    .pos = 0,
+                };
+
+                if (in_buf.size == 0) {
+                    return 0;
+                }
+
+                var out_buf = zstandart.OutBuffer{
+                    .dst = self.buffer.ptr,
+                    .size = self.buffer.len,
+                    .pos = 0,
+                };
+
+                const remaining = try zstandart.compressStream(self.inner, &in_buf, &out_buf);
+                std.debug.print("{d}/{d} compressed\n", .{ in_buf.pos, in_buf.size });
+                std.debug.print("remaining: {d}\n", .{remaining});
+                if (remaining == 1) {
+                    _ = try zstandart.endStream(self.inner, &out_buf);
+                }
+                assert(in_buf.size == in_buf.pos); // if this fails we're in trouble
+
+                try self.source.writeAll(self.buffer[0..out_buf.pos]);
+
+                self.unread_bytes -= in_buf.pos;
+                return out_buf.pos;
             }
 
             pub inline fn setFrameSize(self: *Self, n: usize) void {
+                assert(self.unread_bytes == 0);
+                zstandart.setPladgedSize(self.inner, n) catch unreachable;
                 self.unread_bytes = n;
             }
         };
+    }
+
+    pub fn compressor(allocator: Allocator, writer: anytype, options: CompressOptions) !Compressor(@TypeOf(writer)) {
+        return try Compressor(@TypeOf(writer)).init(allocator, writer, options);
     }
 };

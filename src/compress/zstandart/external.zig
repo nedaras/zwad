@@ -28,7 +28,7 @@ pub const ZSTD_DStream = c.ZSTD_DCtx; // not wanna recreate that has defined stu
 pub const sz = c.ZSTD_CONTENTSIZE_UNKNOWN;
 
 pub const ZSTD_inBuffer = extern struct {
-    src: [*]u8,
+    src: [*]const u8,
     size: usize,
     pos: usize,
 };
@@ -65,10 +65,17 @@ pub extern fn ZSTD_isError(code: usize) callconv(.C) win.BOOL;
 
 pub extern fn ZSTD_getErrorName(code: usize) callconv(.C) [*:0]const u8;
 
+// todo: look up the scond version mb those ones can be even faster
 pub extern fn ZSTD_compress(dst: [*]u8, dstCapacity: usize, src: [*]const u8, srcSize: usize, compressionLevel: Level) callconv(.C) usize;
+
+pub extern fn ZSTD_compressStream(zcs: *ZSTD_CStream, output: *ZSTD_outBuffer, input: *ZSTD_inBuffer) callconv(.C) usize;
 
 pub extern fn ZSTD_createCStream() callconv(.C) ?*ZSTD_CStream;
 
 pub extern fn ZSTD_createCStream_advanced(customMem: ZSTD_customMem) callconv(.C) ?*ZSTD_CStream;
 
-pub extern fn ZSTD_CCtx_setPledgedSrcSize(cctx: *ZSTD_CStream, pledgedSrcSize: u66) callconv(.C) usize;
+pub extern fn ZSTD_CCtx_setPledgedSrcSize(cctx: *ZSTD_CStream, pledgedSrcSize: u64) callconv(.C) usize;
+
+pub extern fn ZSTD_freeCStream(zds: *ZSTD_CStream) callconv(.C) usize;
+
+pub extern fn ZSTD_endStream(zcs: *ZSTD_CStream, output: *ZSTD_outBuffer) callconv(.C) usize;
