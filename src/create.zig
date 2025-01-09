@@ -70,7 +70,17 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
 
     for (entries.items) |*entry| {
         entry.offset += @intCast(@sizeOf(toc.Version) + @sizeOf(toc.Header.v1) + entries.items.len * @sizeOf(toc.Entry.v1));
-        try writer.writeStruct(entry.*);
+    }
+
+    const Context = struct {
+        fn lessThan(_: void, a: toc.Entry.v1, b: toc.Entry.v1) bool {
+            return a.hash < b.hash;
+        }
+    };
+    std.sort.block(toc.Entry.v1, entries.items, {}, Context.lessThan);
+
+    for (entries.items) |entry| {
+        try writer.writeStruct(entry);
     }
 
     try writer.writeAll(block.items);
