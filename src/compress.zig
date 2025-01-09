@@ -162,28 +162,34 @@ pub const zstd = struct {
                     .pos = 0,
                 };
 
-                if (in_buf.size == 0) {
-                    return 0;
-                }
-
                 var out_buf = zstandart.OutBuffer{
                     .dst = self.buffer.ptr,
                     .size = self.buffer.len,
                     .pos = 0,
                 };
 
-                const remaining = try zstandart.compressStream(self.inner, &in_buf, &out_buf);
-                std.debug.print("{d}/{d} compressed\n", .{ in_buf.pos, in_buf.size });
-                std.debug.print("remaining: {d}\n", .{remaining});
-                if (remaining == 1) {
-                    _ = try zstandart.endStream(self.inner, &out_buf);
+                var n: usize = 0;
+                while (in_buf.pos != in_buf.size) {
+                    defer out_buf.pos = 0;
+
+                    _ = try zstandart.compressStream(self.inner, &in_buf, &out_buf);
+
+                    if (out_buf.pos > 0) {
+                        try self.source.writeAll(self.buffer[0..out_buf.pos]);
+
+                        n += out_buf.pos;
+                    }
                 }
-                assert(in_buf.size == in_buf.pos); // if this fails we're in trouble
+
+                assert(out_buf.pos == 0);
+                if (self.unread_bytes == in_buf.pos) {
+                    assert(try zstandart.endStream(self.inner, &out_buf) == 0);
+                }
 
                 try self.source.writeAll(self.buffer[0..out_buf.pos]);
-
                 self.unread_bytes -= in_buf.pos;
-                return out_buf.pos;
+
+                return n + out_buf.pos;
             }
 
             pub inline fn setFrameSize(self: *Self, n: usize) void {

@@ -23,6 +23,12 @@ pub const Level = enum(c_int) {
     level_9 = 9,
 };
 
+pub const EndDirective = enum(c_int) {
+    ZSTD_e_continue = 0,
+    ZSTD_e_flush = 1,
+    ZSTD_e_end = 2,
+};
+
 pub const ZSTD_CStream = c.ZSTD_CCtx;
 pub const ZSTD_DStream = c.ZSTD_DCtx; // not wanna recreate that has defined stuff inside is defined based on systems
 pub const sz = c.ZSTD_CONTENTSIZE_UNKNOWN;

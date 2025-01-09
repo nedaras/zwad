@@ -212,7 +212,6 @@ pub const CompressStreamError = error{
     Unexpected,
 };
 
-// tood: integrate compressStream2
 pub fn compressStream(stream: *CompressStream, in: *InBuffer, out: *OutBuffer) CompressStreamError!usize {
     const res = zstd.ZSTD_compressStream(stream, out, in);
     return switch (getErrorCode(res)) {

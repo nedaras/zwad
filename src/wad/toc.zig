@@ -2,7 +2,7 @@ pub const LatestHeader = Header.v3;
 pub const LatestEntry = Entry.v3_4;
 
 pub const Version = extern struct {
-    magic: [2]u8,
+    magic: [2]u8 = [_]u8{ 'R', 'W' },
     major: u8,
     minor: u8,
 };

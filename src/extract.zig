@@ -124,7 +124,10 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
 
-        // i dont like this skip part
+        if (bytes_handled > entry.offset) {
+            return logger.fatal("This archive seems to be corrupted", .{});
+        }
+
         var skip = entry.offset - bytes_handled;
         while (skip > 0) {
             const n = reader.read(write_buffer[0..@min(write_buffer.len, skip)]) catch |err| return switch (err) {
