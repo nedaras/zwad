@@ -224,6 +224,19 @@ pub fn parseArguments(allocator: Allocator, options: ParseOptions) Allocator.Err
         return args;
     }
 
+    var i: usize = 0;
+    blk: while (i < files.items.len) {
+        const file_a = files.items[i];
+        for (0..files.items.len) |j| {
+            const file_b = files.items[j];
+            if (i != j and std.mem.eql(u8, file_a, file_b)) {
+                _ = files.orderedRemove(i);
+                continue :blk;
+            }
+        }
+        i += 1;
+    }
+
     args.files = try files.toOwnedSlice();
     args.operation = operation.?;
 

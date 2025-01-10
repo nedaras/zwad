@@ -165,9 +165,9 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                     };
                 }
 
-                if (prev_entry.offset + prev_entry.decompressed_len > entry.offset) {
-                    return error.InvalidFile;
-                }
+                //if (prev_entry.offset + prev_entry.decompressed_len > entry.offset) {
+                //return error.InvalidFile;
+                //}
 
                 const skip = entry.offset - prev_entry.offset - prev_entry.compressed_len + self.unread_file_bytes;
                 if (skip > 0) {

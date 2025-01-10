@@ -65,22 +65,16 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     var entries = std.ArrayList(PathedEntry).init(allocator);
     defer entries.deinit();
 
-    blk: for (files) |file| {
+    for (files) |file| {
         const hash = xxhash.XxHash64.hash(0, file);
-        for (file_hashes.items) |h| {
-            if (hash == h[1]) continue :blk;
-        }
         try file_hashes.append(.{ file, hash });
     }
 
-    {
-        const Context = struct {
-            fn lessThan(_: void, a: PathedHash, b: PathedHash) bool {
-                return a[1] < b[1];
-            }
-        };
-        std.sort.block(PathedHash, file_hashes.items, {}, Context.lessThan);
-    }
+    std.sort.block(PathedHash, file_hashes.items, {}, struct {
+        fn inner(_: void, a: PathedHash, b: PathedHash) bool {
+            return a[1] < b[1];
+        }
+    }.inner);
 
     var iter = wad.header.headerIterator(reader) catch |err| return switch (err) {
         error.UnknownVersion => return error.Outdated,
@@ -104,12 +98,11 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
     };
 
-    const Context = struct {
-        fn lessThan(_: void, a: PathedEntry, b: PathedEntry) bool {
+    std.sort.block(PathedEntry, entries.items, {}, struct {
+        fn inner(_: void, a: PathedEntry, b: PathedEntry) bool {
             return a[1].offset < b[1].offset;
         }
-    };
-    std.sort.block(PathedEntry, entries.items, {}, Context.lessThan);
+    }.inner);
 
     var window_buffer: [1 << 17]u8 = undefined;
     var write_buffer: [1 << 17]u8 = undefined;
@@ -205,7 +198,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     const dir = options.directory.?;
 
     const stdout = std.io.getStdOut();
-    var bw = io.BufferedWriter(1024, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+    var bw = io.bufferedWriter(stdout.writer());
 
     const writer = bw.writer();
 

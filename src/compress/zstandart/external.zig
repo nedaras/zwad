@@ -61,6 +61,8 @@ pub extern fn ZSTD_freeDStream(zds: *ZSTD_DStream) callconv(.C) usize;
 
 pub extern fn ZSTD_getFrameContentSize(src: [*]const u8, srcSize: usize) callconv(.C) usize;
 
+pub extern fn ZSTD_findFrameCompressedSize(src: [*]const u8, srcSize: usize) callconv(.C) usize;
+
 pub extern fn ZSTD_initDStream(zds: *ZSTD_DStream) callconv(.C) usize;
 
 pub extern fn ZSTD_decompress(dst: [*]u8, dstCapacity: usize, src: [*]const u8, compressedSize: usize) callconv(.C) usize;
@@ -85,3 +87,5 @@ pub extern fn ZSTD_CCtx_setPledgedSrcSize(cctx: *ZSTD_CStream, pledgedSrcSize: u
 pub extern fn ZSTD_freeCStream(zds: *ZSTD_CStream) callconv(.C) usize;
 
 pub extern fn ZSTD_endStream(zcs: *ZSTD_CStream, output: *ZSTD_outBuffer) callconv(.C) usize;
+
+pub extern fn ZSTD_compressBound(srcSize: usize) callconv(.C) usize;
