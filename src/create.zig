@@ -27,10 +27,6 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
         return;
     }
 
-    for (files) |f| {
-        std.debug.print("{s}\n", .{f});
-    }
-
     var block = std.ArrayList(u8).init(allocator);
     defer block.deinit();
 
@@ -42,8 +38,13 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
 
     const toc = @import("wad/toc.zig");
 
-    var entries = std.ArrayList(toc.Entry.v1).init(allocator);
+    var entries = try std.ArrayList(toc.Entry.v1).initCapacity(allocator, files.len);
     defer entries.deinit();
+
+    var map = std.AutoHashMap(u64, u32).init(allocator);
+    defer map.deinit();
+
+    try map.ensureTotalCapacity(@intCast(files.len));
 
     for (files) |sub_path| {
         const file = try fs.cwd().openFile(sub_path, .{});
@@ -53,15 +54,31 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
 
         zstd_stream.setFrameSize(file_size);
 
+        // todo: test if zigs version is faster
+        var hash = xxhash.XxHash64.init(0);
+
         var compressed_size: u32 = 0;
         while (true) {
             const amt = try file.read(&read_buffer);
             if (amt == 0) break;
 
+            hash.update(read_buffer[0..amt]);
             compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
         }
-        const offset: u32 = @intCast(@sizeOf(toc.Version) + @sizeOf(toc.Header.v1) + @sizeOf(toc.Entry.v1) * entries.items.len + block.items.len);
-        try entries.append(toc.Entry.v1{
+
+        const subchunk = hash.final();
+        var offset: u32 = undefined;
+
+        if (map.get(subchunk)) |off| {
+            offset = off;
+            block.items.len -= compressed_size;
+        } else {
+            const header_len = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1) + @sizeOf(toc.Entry.v1) * files.len;
+            offset = @intCast(header_len + block.items.len - compressed_size);
+            map.putAssumeCapacity(subchunk, offset);
+        }
+
+        entries.appendAssumeCapacity(toc.Entry.v1{
             .hash = xxhash.XxHash64.hash(0, sub_path),
             .entry_type = .zstd,
             .compressed_len = compressed_size,
@@ -69,6 +86,12 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
             .offset = offset,
         });
     }
+
+    std.sort.block(toc.Entry.v1, entries.items, {}, struct {
+        fn inner(_: void, a: toc.Entry.v1, b: toc.Entry.v1) bool {
+            return a.hash < b.hash;
+        }
+    }.inner);
 
     if (entries.items.len != files.len) {
         const sub: u32 = @intCast(files.len - entries.items.len);
@@ -88,7 +111,7 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
         .entries_offset = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1),
     });
 
-    try writer.writeAll(std.mem.asBytes(block.items));
+    try writer.writeAll(std.mem.sliceAsBytes(entries.items));
     try writer.writeAll(block.items);
 
     _ = options;

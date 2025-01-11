@@ -84,7 +84,9 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
             };
 
-            if (self.prev_hash > entry.hash) return error.InvalidFile;
+            if (self.prev_hash > entry.hash) {
+                return error.InvalidFile;
+            }
 
             if (entry.decompressed_len > 4 * gb) return error.InvalidFile;
             if (entry.compressed_len > 4 * gb) return error.InvalidFile;

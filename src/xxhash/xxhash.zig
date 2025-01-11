@@ -24,6 +24,15 @@ pub const XXH3_state_t = extern struct {
     extSecret: [*:0]u8,
 };
 
+pub const XXH64_state_t = extern struct {
+    total_len: XXH64_hash_t,
+    acc: [4]XXH64_hash_t,
+    buffer: [32]u8,
+    bufferedSize: XXH32_hash_t,
+    reserved32: XXH32_hash_t,
+    reserved64: XXH64_hash_t,
+};
+
 pub const XXH128_hash_t = extern struct {
     low64: XXH64_hash_t,
     high64: XXH64_hash_t,
@@ -38,3 +47,9 @@ pub extern fn XXH3_128bits_digest(statePtr: *const XXH3_state_t) XXH128_hash_t;
 pub extern fn XXH3_64bits(input: [*]const u8, length: usize) u64;
 
 pub extern fn XXH64(input: [*]const u8, length: usize, seed: u64) u64;
+
+pub extern fn XXH64_reset(statePtr: ?*XXH64_state_t, seed: XXH64_hash_t) XXH_errorcode;
+
+pub extern fn XXH64_update(statePtr: *XXH64_state_t, input: [*]const u8, length: usize) XXH_errorcode;
+
+pub extern fn XXH64_digest(statePtr: *const XXH64_state_t) XXH64_hash_t;

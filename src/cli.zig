@@ -50,7 +50,7 @@ pub const Arguments = struct {
     operation: Action,
     options: Options,
 
-    files: []const []const u8 = &.{},
+    files: [][]const u8 = &.{},
 
     pub fn deinit(self: *Arguments) void {
         self.iter.deinit();

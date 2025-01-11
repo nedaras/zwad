@@ -49,7 +49,28 @@ pub fn XxHash3(bits: comptime_int) type {
 }
 
 pub const XxHash64 = struct {
+    const Self = @This();
+
+    state: xxhash.XXH64_state_t,
+
     pub inline fn hash(seed: u64, input: []const u8) u64 {
         return xxhash.XXH64(input.ptr, input.len, seed);
+    }
+
+    pub fn init(seed: u64) Self {
+        var state: xxhash.XXH64_state_t = undefined;
+        assert(xxhash.XXH64_reset(&state, seed) == .XXH_OK);
+
+        return .{
+            .state = state,
+        };
+    }
+
+    pub inline fn update(self: *Self, input: []const u8) void {
+        assert(xxhash.XXH64_update(&self.state, input.ptr, input.len) == .XXH_OK);
+    }
+
+    pub inline fn final(self: *const Self) u64 {
+        return xxhash.XXH64_digest(&self.state);
     }
 };

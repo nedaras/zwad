@@ -19,7 +19,7 @@ const is_windows = builtin.os.tag == .windows;
 const Entry = wad.header.Entry;
 const assert = std.debug.assert;
 
-pub fn extract(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
+pub fn extract(allocator: Allocator, options: Options, files: [][]const u8) HandleError!void {
     const Error = fs.File.Reader.Error;
 
     if (options.file == null) {
@@ -48,31 +48,25 @@ pub fn extract(allocator: Allocator, options: Options, files: []const []const u8
     try extractAll(allocator, castedReader(Error, &fbs), options);
 }
 
-fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: []const []const u8) HandleError!void {
+fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [][]const u8) HandleError!void {
     assert(options.directory == null);
-    if (files.len == 0) return;
+
+    if (files.len == 0) {
+        return;
+    }
 
     const PathedEntry = struct { []const u8, Entry };
-    const PathedHash = struct { []const u8, u64 };
 
     // unleast we add patterns for extracting file like `assets/*` i do not see a good enough reason to buffer stdout
     const stdout = std.io.getStdOut();
     const writer = stdout.writer();
 
-    var file_hashes = std.ArrayList(PathedHash).init(allocator);
-    defer file_hashes.deinit();
-
-    var entries = std.ArrayList(PathedEntry).init(allocator);
+    var entries = try std.ArrayList(PathedEntry).initCapacity(allocator, files.len);
     defer entries.deinit();
 
-    for (files) |file| {
-        const hash = xxhash.XxHash64.hash(0, file);
-        try file_hashes.append(.{ file, hash });
-    }
-
-    std.sort.block(PathedHash, file_hashes.items, {}, struct {
-        fn inner(_: void, a: PathedHash, b: PathedHash) bool {
-            return a[1] < b[1];
+    std.sort.block([]const u8, files, {}, struct {
+        fn inner(_: void, a: []const u8, b: []const u8) bool {
+            return xxhash.XxHash64.hash(0, a) < xxhash.XxHash64.hash(0, b);
         }
     }.inner);
 
@@ -85,11 +79,14 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 
     while (iter.next()) |mb| {
         const entry = mb orelse break;
-        if (entries.items.len == file_hashes.items.len) break;
+        if (entries.items.len == files.len) break;
 
-        const path, const hash = file_hashes.items[entries.items.len];
+        // this should be cached outside the while loop ye??
+        const path = files[entries.items.len];
+        const hash = xxhash.XxHash64.hash(0, path);
+
         if (entry.hash == hash) {
-            try entries.append(.{ path, entry });
+            entries.appendAssumeCapacity(.{ path, entry });
         }
     } else |err| return switch (err) {
         error.InvalidFile => logger.fatal("This archive seems to be corrupted", .{}),
