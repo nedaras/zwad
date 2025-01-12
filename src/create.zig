@@ -5,21 +5,13 @@ const xxhash = @import("xxhash.zig");
 const io = std.io;
 const fs = std.fs;
 const math = std.math;
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const Options = @import("cli.zig").Options;
 const assert = std.debug.assert;
 
-fn ascXxhashed64(seed: u64) fn (void, []const u8, []const u8) bool {
-    return struct {
-        pub fn inner(_: void, a: []const u8, b: []const u8) bool {
-            return xxhash.XxHash64.hash(seed, a) < xxhash.XxHash64.hash(seed, b);
-        }
-    }.inner;
-}
-
-// todo: make like set([]const u8) of files
-// todo: optimize for duplicates ignoring
-// todo: ignore duplicate file paths
-pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []const u8) !void {
+// wtf are subchunks?
+pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
     const stdout = io.getStdOut();
     const writer = stdout.writer();
 
@@ -69,6 +61,7 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
         const subchunk = hash.final();
         var offset: u32 = undefined;
 
+        var entry_type: wad.EntryType = .zstd;
         if (map.get(subchunk)) |off| {
             offset = off;
             block.items.len -= compressed_size;
@@ -76,17 +69,34 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
             const header_len = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1) + @sizeOf(toc.Entry.v1) * files.len;
             offset = @intCast(header_len + block.items.len - compressed_size);
             map.putAssumeCapacity(subchunk, offset);
+
+            if (compressed_size > file_size) blk: {
+                file.seekTo(0) catch break :blk;
+
+                entry_type = .raw;
+                block.items.len -= compressed_size;
+
+                var unread_bytes = file_size;
+                while (unread_bytes != 0) {
+                    const len = @min(read_buffer.len, unread_bytes);
+                    try file.reader().readNoEof(read_buffer[0..len]);
+
+                    try block.appendSlice(read_buffer[0..len]);
+                    unread_bytes -= @intCast(len);
+                }
+            }
         }
 
         entries.appendAssumeCapacity(toc.Entry.v1{
             .hash = xxhash.XxHash64.hash(0, sub_path),
-            .entry_type = .zstd,
+            .entry_type = entry_type,
             .compressed_len = compressed_size,
             .decompressed_len = file_size,
             .offset = offset,
         });
     }
 
+    // todo: check what is faster sorting paths before hand or sorting entries
     std.sort.block(toc.Entry.v1, entries.items, {}, struct {
         fn inner(_: void, a: toc.Entry.v1, b: toc.Entry.v1) bool {
             return a.hash < b.hash;
@@ -111,7 +121,7 @@ pub fn create(allocator: std.mem.Allocator, options: Options, files: []const []c
         .entries_offset = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1),
     });
 
-    try writer.writeAll(std.mem.sliceAsBytes(entries.items));
+    try writer.writeAll(mem.sliceAsBytes(entries.items));
     try writer.writeAll(block.items);
 
     _ = options;

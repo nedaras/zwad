@@ -110,6 +110,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     var write_files = std.ArrayList(fs.File).init(allocator);
     defer write_files.deinit();
 
+    // todo: make this more readable
     var bytes_handled: u32 = iter.bytesRead();
     for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
@@ -159,7 +160,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
                 .zstd, .zstd_multi => zstd_stream.reader().readNoEof(buf),
                 else => @panic("not implemented"),
             } catch |err| return switch (err) {
-                error.MalformedFrame, error.MalformedBlock => logger.fatal("This archive seems to be corrupted", .{}),
+                error.MalformedFrame, error.MalformedBlock => |e| logger.fatal("This archive seems to be corrupted error={s}", .{@errorName(e)}),
                 error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
                 error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
                 else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),
@@ -183,7 +184,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             writer.writeByte('\n') catch return;
         }
 
-        bytes_handled += skip + entry.compressed_len;
+        bytes_handled = entry.offset + entry.compressed_len;
     }
 }
 
