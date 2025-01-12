@@ -100,6 +100,27 @@ pub fn main_generate_hashes() !void {
     try out_file.writeAll(final);
 }
 
+pub fn _main() !void {
+    //subchunks: 3, subchunk_inex: 15971 compressed: 19913
+    //assets/maps/particles/tft/booms/chibi_yuumi/yuumi_base_boom_trail_01.tft_booms_yuumi_base.tex
+
+    const file = try fs.cwd().openFile("out/data/final/global.wad.subchunktoc", .{});
+    defer file.close();
+
+    try file.reader().skipBytes(15971 * 16, .{});
+
+    const Subchunk = extern struct {
+        compressed: u32,
+        decompressed: u32,
+        checksum: u64,
+    };
+
+    for (0..3) |_| {
+        const s = try file.reader().readStruct(Subchunk);
+        std.debug.print("{}\n", .{s});
+    }
+}
+
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 // todo: we need a way to test our application fuzzing would be the best way
 pub fn main() !void {

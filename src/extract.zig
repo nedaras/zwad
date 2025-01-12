@@ -152,6 +152,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             zstd_stream.unread_bytes = entry.compressed_len;
         }
 
+        std.debug.print("subchunks: {d}, subchunk_inex: {d} compressed: {d}\n", .{ entry.subchunk_len, entry.subchunk_index, entry.compressed_len });
         var write_len: usize = entry.decompressed_len;
         while (write_len != 0) {
             const buf = write_buffer[0..@min(write_buffer.len, write_len)];

@@ -45,17 +45,19 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
         pub const HeaderIterator = header.HeaderIterator(ReaderType);
 
-        pub const Entry = struct { // idea is simple pass in Entry(ReaderType) as its main reader and handle cached data its own way
+        pub const Entry = struct {
             hash: u64,
             compressed_len: u32,
             decompressed_len: u32,
+
+            subchunk_len: u4,
+            subchunk_index: u16,
 
             decompressor: ?union(enum) {
                 none: ReaderType,
                 zstd: *compress.zstd.Decompressor(ReaderType),
             },
 
-            // todo: find a way to make this work
             unread_bytes: *u32,
             available_bytes: *u32,
 
@@ -159,6 +161,8 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                         .hash = entry.hash,
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
+                        .subchunk_len = entry.subchunk_len,
+                        .subchunk_index = entry.subchunk_index,
                         .decompressor = null,
                         .unread_bytes = &self.unread_file_bytes,
                         .available_bytes = &self.available_file_bytes,
@@ -187,6 +191,8 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 .hash = entry.hash,
                 .compressed_len = entry.compressed_len,
                 .decompressed_len = entry.decompressed_len,
+                .subchunk_len = entry.subchunk_len,
+                .subchunk_index = entry.subchunk_index,
                 .decompressor = switch (entry.type) {
                     .raw => .{ .none = self.reader },
                     .zstd, .zstd_multi => .{ .zstd = &self.zstd },

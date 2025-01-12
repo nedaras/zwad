@@ -7,9 +7,9 @@ pub const Entry = struct {
     hash: u64,
     compressed_len: u32,
     decompressed_len: u32,
-
     type: toc.EntryType,
-
+    subchunk_len: u4,
+    subchunk_index: u16,
     offset: u32,
 };
 
@@ -39,6 +39,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
                         .type = entry.entry_type,
+                        .subchunk_len = 0,
+                        .subchunk_index = 0,
                         .offset = entry.offset,
                     };
                 },
@@ -49,6 +51,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
                         .type = entry.entry_type,
+                        .subchunk_len = entry.subchunk_len,
+                        .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                     };
                 },
@@ -59,6 +63,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
                         .type = entry.entry_type,
+                        .subchunk_len = entry.subchunk_len,
+                        .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                     };
                 },
@@ -69,6 +75,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
                         .type = entry.entry_type,
+                        .subchunk_len = entry.subchunk_len,
+                        .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                     };
                 },
@@ -79,6 +87,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .compressed_len = entry.compressed_len,
                         .decompressed_len = entry.decompressed_len,
                         .type = entry.entry_type,
+                        .subchunk_len = entry.subchunk_len,
+                        .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                     };
                 },

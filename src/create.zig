@@ -46,8 +46,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
         zstd_stream.setFrameSize(file_size);
 
-        // todo: test if zigs version is faster
-        var hash = xxhash.XxHash64.init(0);
+        var hash = xxhash.XxHash3(64).init();
 
         var compressed_size: u32 = 0;
         while (true) {

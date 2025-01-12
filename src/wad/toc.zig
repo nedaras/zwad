@@ -56,7 +56,7 @@ pub const Entry = struct {
         entry_type: EntryType,
         subchunk_len: u4,
         duplicate: u8,
-        subchunk: u16,
+        subchunk_index: u16,
     };
 
     pub const v3 = packed struct {
@@ -67,7 +67,7 @@ pub const Entry = struct {
         entry_type: EntryType,
         subchunk_len: u4,
         duplicate: u8,
-        subchunk: u16,
+        subchunk_index: u16,
         checksum: u64,
     };
 
@@ -79,7 +79,7 @@ pub const Entry = struct {
         entry_type: EntryType,
         subchunk_len: u4,
         duplicate: u8,
-        subchunk: u16,
+        subchunk_index: u16,
         checksum: u64,
     };
 
@@ -90,7 +90,8 @@ pub const Entry = struct {
         decompressed_len: u32,
         entry_type: EntryType,
         subchunk_len: u4,
-        subchunk: u24,
+        duplicate: u8,
+        subchunk_index: u16,
         checksum: u64,
     };
 };
