@@ -53,6 +53,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             subchunk_len: u4,
             subchunk_index: u16,
 
+            checksum: ?u64,
             decompressor: ?union(enum) {
                 none: ReaderType,
                 zstd: *compress.zstd.Decompressor(ReaderType),
@@ -152,10 +153,13 @@ pub fn StreamIterator(comptime ReaderType: type) type {
             if (self.entries.items.len != self.entries.capacity) {
                 const prev_entry = self.entries.allocatedSlice()[self.entries.items.len];
 
+                // todo: check if duplication can be verfied
                 if (entry.offset == prev_entry.offset) {
                     if (entry.compressed_len != prev_entry.compressed_len) return error.InvalidFile;
                     if (entry.decompressed_len != prev_entry.decompressed_len) return error.InvalidFile;
                     if (entry.type != prev_entry.type) return error.InvalidFile;
+                    if (entry.type != prev_entry.type) return error.InvalidFile;
+                    if (entry.checksum != prev_entry.checksum) return error.InvalidFile;
 
                     return .{
                         .hash = entry.hash,
@@ -163,16 +167,14 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                         .decompressed_len = entry.decompressed_len,
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
+                        .checksum = entry.checksum,
                         .decompressor = null,
                         .unread_bytes = &self.unread_file_bytes,
                         .available_bytes = &self.available_file_bytes,
                     };
                 }
 
-                //if (prev_entry.offset + prev_entry.decompressed_len > entry.offset) {
-                //return error.InvalidFile;
-                //}
-
+                // todo: check for overflows
                 const skip = entry.offset - prev_entry.offset - prev_entry.compressed_len + self.unread_file_bytes;
                 if (skip > 0) {
                     try self.reader.skipBytes(skip, .{});
@@ -193,6 +195,7 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 .decompressed_len = entry.decompressed_len,
                 .subchunk_len = entry.subchunk_len,
                 .subchunk_index = entry.subchunk_index,
+                .checksum = entry.checksum,
                 .decompressor = switch (entry.type) {
                     .raw => .{ .none = self.reader },
                     .zstd, .zstd_multi => .{ .zstd = &self.zstd },

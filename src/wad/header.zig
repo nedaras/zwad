@@ -11,6 +11,7 @@ pub const Entry = struct {
     subchunk_len: u4,
     subchunk_index: u16,
     offset: u32,
+    checksum: ?u64,
 };
 
 pub fn HeaderIterator(comptime ReaderType: type) type {
@@ -42,6 +43,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .subchunk_len = 0,
                         .subchunk_index = 0,
                         .offset = entry.offset,
+                        .checksum = null,
                     };
                 },
                 .v2 => blk: {
@@ -54,6 +56,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
+                        .checksum = null,
                     };
                 },
                 .v3 => blk: {
@@ -66,6 +69,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
+                        .checksum = entry.checksum,
                     };
                 },
                 .v3_3 => blk: {
@@ -78,6 +82,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
+                        .checksum = entry.checksum,
                     };
                 },
                 .v3_4 => blk: {
@@ -90,6 +95,7 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
+                        .checksum = entry.checksum,
                     };
                 },
             };

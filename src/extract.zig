@@ -104,6 +104,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     var window_buffer: [1 << 17]u8 = undefined;
     var write_buffer: [1 << 17]u8 = undefined;
 
+    // make a reader that would compute subchunks at the same time or mb zstd makes them subchunks
     var zstd_stream = try compress.zstd.decompressor(allocator, reader, .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
@@ -115,6 +116,8 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
     for (entries.items, 0..) |pathed_entry, i| {
         const path, const entry = pathed_entry;
 
+        // todo: check checksums
+        // checksum is just Xxhash3(64).hash(0, compressed_buf)
         if (bytes_handled > entry.offset) {
             return logger.fatal("This archive seems to be corrupted", .{});
         }
@@ -177,7 +180,6 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
 
             write_len -= @intCast(buf.len);
         }
-        assert(write_len == 0);
 
         if (options.verbose) {
             writer.writeAll(path) catch return;
@@ -215,6 +217,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
     var write_buffer: [1 << 17]u8 = undefined;
     var window_buf: [1 << 17]u8 = undefined;
 
+    // todo: check checksums
     var iter = wad.streamIterator(allocator, reader, .{
         .handle_duplicates = false,
         .window_buffer = &window_buf,
