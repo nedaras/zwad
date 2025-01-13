@@ -101,24 +101,49 @@ pub fn main_generate_hashes() !void {
 }
 
 pub fn _main() !void {
-    //subchunks: 3, subchunk_inex: 15971 compressed: 19913
+    //checksums: 3, subchunk_inex: 15971 compressed: 19913
     //assets/maps/particles/tft/booms/chibi_yuumi/yuumi_base_boom_trail_01.tft_booms_yuumi_base.tex
 
-    const file = try fs.cwd().openFile("out/data/final/global.wad.subchunktoc", .{});
+    // 6525dbd92e8d3c77
+
+    // we need to find a way to make these checksums seemless
+    // these checksums do only accure on .tex file but it does not matter
+    // we need to make a way that if we decompress all file and change some checksumed files
+    // at the end it still should have checksums we need a way to see if file should be made using subchunks
+    // i think smth like one checksum for every 3 bitmaps
+
+    // until 7 bitmaps no checksums
+    // and after just add and add checksums
+
+    // there is no direct way to identify checksum file
+
+    const file = try fs.cwd().openFile("Global.wad.client", .{});
     defer file.close();
 
-    try file.reader().skipBytes(15971 * 16, .{});
+    var hash = @import("xxhash.zig").XxHash64.init(0);
+    var before_checksum: [@sizeOf(toc.Version) + 256]u8 = undefined;
 
-    const Subchunk = extern struct {
-        compressed: u32,
-        decompressed: u32,
-        checksum: u64,
-    };
+    try file.reader().readNoEof(&before_checksum);
 
-    for (0..3) |_| {
-        const s = try file.reader().readStruct(Subchunk);
-        std.debug.print("{}\n", .{s});
+    hash.update(&before_checksum);
+
+    //for (0..header.entries_len) |_| {
+    //const entry = try file.reader().readStruct(toc.Entry.v3_4);
+    //const a: [8]u8 = @bitCast(entry.checksum);
+    //hash.update(&a);
+    //}
+
+    try file.reader().skipBytes(8, .{});
+
+    while (true) {
+        var buf: [1024 * 4]u8 = undefined;
+        const amt = try file.read(&buf);
+        if (amt == 0) break;
+
+        hash.update(buf[0..amt]);
     }
+
+    std.debug.print("mysum: {x}\n", .{hash.final()});
 }
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
@@ -202,4 +227,187 @@ fn fastHexParse(comptime T: type, buf: []const u8) !u64 { // we can simd, but id
     }
 
     return result;
+}
+
+const toc = @import("wad/toc.zig");
+
+// commentded out are those who failed
+test "finding checksum from block xxhash64" {
+    var xxhash64 = @import("xxhash.zig").XxHash64.init(0);
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashBlock("Global.wad.client", &xxhash64));
+}
+
+test "finding checksum from block xxhash3" {
+    var xxhash3 = @import("xxhash.zig").XxHash3(64).init();
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashBlock("Global.wad.client", &xxhash3));
+}
+
+test "finding checksum from entries xxhash64" {
+    var xxhash64 = @import("xxhash.zig").XxHash64.init(0);
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashEntries("Global.wad.client", &xxhash64));
+}
+
+test "finding checksum from entries xxhash3" {
+    var xxhash3 = @import("xxhash.zig").XxHash3(64).init();
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashEntries("Global.wad.client", &xxhash3));
+}
+
+test "finding checksum from decompressed xxhash64" {
+    var xxhash64 = @import("xxhash.zig").XxHash64.init(0);
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashDecompressed("Global.wad.client", &xxhash64));
+}
+
+test "finding checksum from decompressed xxhash3" {
+    var xxhash3 = @import("xxhash.zig").XxHash3(64).init();
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashDecompressed("Global.wad.client", &xxhash3));
+}
+
+test "finding checksum from entry checksum xxhash64" {
+    var xxhash64 = @import("xxhash.zig").XxHash64.init(0);
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashEntryChecksums("Global.wad.client", &xxhash64));
+}
+
+test "finding checksum from entry checksums xxhash3" {
+    var xxhash3 = @import("xxhash.zig").XxHash3(64).init();
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashEntryChecksums("Global.wad.client", &xxhash3));
+}
+
+test "finding checksum from whole except ver and checksum xxhash64" {
+    var xxhash64 = @import("xxhash.zig").XxHash64.init(0);
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashWholeExceptVersioAndSubchunk("Global.wad.client", &xxhash64));
+}
+
+test "finding checksum from whole except ver and checksum xxhash3" {
+    var xxhash3 = @import("xxhash.zig").XxHash3(64).init();
+    try std.testing.expectEqual(0x6525dbd92e8d3c77, try hashWholeExceptVersioAndSubchunk("Global.wad.client", &xxhash3));
+}
+
+fn hashBlock(sub_path: []const u8, hasher: anytype) !u64 {
+    const file = try fs.cwd().openFile(sub_path, .{});
+    defer file.close();
+
+    try file.seekBy(@sizeOf(toc.Version));
+    const header = try file.reader().readStruct(toc.LatestHeader);
+
+    try file.seekBy(header.entries_len * @sizeOf(toc.LatestEntry));
+
+    while (true) {
+        var buf: [1 << 17]u8 = undefined;
+        const amt = try file.read(&buf);
+        if (amt == 0) break;
+
+        hasher.update(buf[0..amt]);
+    }
+
+    return hasher.final();
+}
+
+fn hashEntries(sub_path: []const u8, hasher: anytype) !u64 {
+    const file = try fs.cwd().openFile(sub_path, .{});
+    defer file.close();
+
+    try file.seekBy(@sizeOf(toc.Version));
+    const header = try file.reader().readStruct(toc.LatestHeader);
+
+    var read_len: u64 = header.entries_len * @sizeOf(toc.LatestEntry);
+    while (true) {
+        var buf: [1 << 17]u8 = undefined;
+        const amt = try file.read(buf[0..@min(buf.len, read_len)]);
+        if (amt == 0) break;
+        read_len -= amt;
+
+        hasher.update(buf[0..amt]);
+    }
+
+    return hasher.final();
+}
+
+fn hashDecompressed(sub_path: []const u8, hasher: anytype) !u64 {
+    const file = try fs.cwd().openFile(sub_path, .{});
+    defer file.close();
+
+    try file.seekBy(@sizeOf(toc.Version));
+    const header = try file.reader().readStruct(toc.LatestHeader);
+
+    var window_buf: [1 << 17]u8 = undefined;
+    var buf: [1 << 17]u8 = undefined;
+
+    var zstd_stream = try compress.zstd.decompressor(std.testing.allocator, file.reader(), .{ .window_buffer = &window_buf });
+    defer zstd_stream.deinit();
+
+    for (0..header.entries_len) |_| {
+        const entry = try file.reader().readStruct(toc.LatestEntry);
+        const pos = try file.getPos();
+
+        try file.seekTo(entry.offset);
+
+        zstd_stream.unread_bytes = entry.compressed_len;
+        zstd_stream.available_bytes = entry.decompressed_len;
+
+        switch (entry.entry_type) {
+            .raw => {
+                var read_len = entry.decompressed_len;
+                while (read_len != 0) {
+                    const amt = try file.read(buf[0..@min(buf.len, read_len)]);
+                    if (amt == 0) break;
+                    read_len -= @intCast(amt);
+                    hasher.update(buf[0..amt]);
+                }
+            },
+            .zstd, .zstd_multi => {
+                while (true) {
+                    const amt = try zstd_stream.read(&buf);
+                    if (amt == 0) break;
+                    hasher.update(buf[0..amt]);
+                }
+            },
+            else => @panic("no"),
+        }
+        try file.seekTo(pos);
+    }
+
+    return hasher.final();
+}
+
+fn hashEntryChecksums(sub_path: []const u8, hasher: anytype) !u64 {
+    const file = try fs.cwd().openFile(sub_path, .{});
+    defer file.close();
+
+    try file.seekBy(@sizeOf(toc.Version));
+    const header = try file.reader().readStruct(toc.LatestHeader);
+
+    for (0..header.entries_len) |_| {
+        const entry = try file.reader().readStruct(toc.LatestEntry);
+        const bytes: [8]u8 = @bitCast(entry.checksum);
+
+        hasher.update(&bytes);
+    }
+
+    return hasher.final();
+}
+
+fn hashWholeExceptVersioAndSubchunk(sub_path: []const u8, hasher: anytype) !u64 {
+    const file = try fs.cwd().openFile(sub_path, .{});
+    defer file.close();
+
+    try file.seekBy(@sizeOf(toc.Version));
+    var signature: [256]u8 = undefined;
+    var entries_len: [4]u8 = undefined;
+
+    try file.reader().readNoEof(&signature);
+    try file.reader().skipBytes(8, .{});
+    try file.reader().readNoEof(&entries_len);
+
+    hasher.update(&signature);
+    hasher.update(&entries_len);
+
+    while (true) {
+        var buf: [1 << 17]u8 = undefined;
+        const amt = try file.read(&buf);
+        if (amt == 0) break;
+
+        hasher.update(buf[0..amt]);
+    }
+
+    return hasher.final();
 }

@@ -11,6 +11,12 @@ const Options = @import("cli.zig").Options;
 const assert = std.debug.assert;
 
 // wtf are subchunks?
+// subchunks are an file that has .subchunk at the end
+// and cuz of that its bad so we should just ignore subchunks and someone using our abi should only create subchunks
+// cuz firstly if we do not know the file name how can we know what subchunk it has? cuz files can be renamed, but .subchunk toc will not chnage
+//   * tough we could bake in like hash 0 would store the subchunks hash or smth
+// and sucendly we do no know what can be subchunked for what i know now .tex files are subchunkuble cuz of bitmaps
+// we just need to hope that legue will accept our zstd_multi converted to zstd only and make an abi that would allow to add subchunks
 pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
     const stdout = io.getStdOut();
     const writer = stdout.writer();

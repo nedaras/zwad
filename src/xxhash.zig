@@ -19,12 +19,12 @@ pub fn XxHash3(bits: comptime_int) type {
         }
 
         pub fn init() Self {
-            if (bits == 64) {
-                @panic("not implemented");
-            }
-
             var state: xxhash.XXH3_state_t = undefined;
-            assert(xxhash.XXH3_128bits_reset(&state) == .XXH_OK);
+            if (bits == 128) {
+                assert(xxhash.XXH3_128bits_reset(&state) == .XXH_OK);
+            } else {
+                assert(xxhash.XXH3_64bits_reset(&state) == .XXH_OK);
+            }
 
             return .{
                 .state = state,
@@ -36,14 +36,14 @@ pub fn XxHash3(bits: comptime_int) type {
                 assert(xxhash.XXH3_128bits_update(&self.state, input.ptr, input.len) == .XXH_OK);
                 return;
             }
-            @panic("not implemented");
+            assert(xxhash.XXH3_64bits_update(&self.state, input.ptr, input.len) == .XXH_OK);
         }
 
         pub inline fn final(self: *const Self) Hash {
             if (bits == 128) {
                 return @bitCast(xxhash.XXH3_128bits_digest(&self.state));
             }
-            @panic("not implemented");
+            return xxhash.XXH3_64bits_digest(&self.state);
         }
     };
 }

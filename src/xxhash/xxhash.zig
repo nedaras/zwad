@@ -42,7 +42,13 @@ pub extern fn XXH3_128bits_reset(statePtr: *XXH3_state_t) XXH_errorcode;
 
 pub extern fn XXH3_128bits_update(statePtr: *XXH3_state_t, input: [*]const u8, length: usize) XXH_errorcode;
 
-pub extern fn XXH3_128bits_digest(statePtr: *const XXH3_state_t) XXH128_hash_t;
+pub extern fn XXH4_128bits_digest(statePtr: *const XXH3_state_t) XXH128_hash_t;
+
+pub extern fn XXH3_64bits_reset(statePtr: *XXH3_state_t) XXH_errorcode;
+
+pub extern fn XXH3_64bits_update(statePtr: *XXH3_state_t, input: [*]const u8, length: usize) XXH_errorcode;
+
+pub extern fn XXH3_64bits_digest(statePtr: *const XXH3_state_t) XXH64_hash_t;
 
 pub extern fn XXH3_64bits(input: [*]const u8, length: usize) u64;
 
