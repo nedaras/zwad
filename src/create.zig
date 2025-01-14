@@ -35,9 +35,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
-    const toc = @import("wad/toc.zig");
-
-    var entries = try std.ArrayList(toc.Entry.v1).initCapacity(allocator, files.len);
+    var entries = try std.ArrayList(ouput.Entry).initCapacity(allocator, files.len);
     defer entries.deinit();
 
     var map = std.AutoHashMap(u64, u32).init(allocator);
@@ -45,13 +43,14 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
     try map.ensureTotalCapacity(@intCast(files.len));
 
+    const header_len = @sizeOf(ouput.Header) + @sizeOf(ouput.Entry) * files.len;
     for (files) |sub_path| {
         const file = try fs.cwd().openFile(sub_path, .{});
         defer file.close();
 
-        const file_size: u32 = @intCast(try file.getEndPos());
+        const decompressed_size: u32 = @intCast(try file.getEndPos());
 
-        zstd_stream.setFrameSize(file_size);
+        zstd_stream.setFrameSize(decompressed_size);
 
         var hash = xxhash.XxHash3(64).init();
 
@@ -64,25 +63,35 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
         }
 
-        const subchunk = hash.final();
-        var offset: u32 = undefined;
+        const subchunk = hash.final(); // we need to subchunk compressed data
 
-        var entry_type: wad.EntryType = .zstd;
-        if (map.get(subchunk)) |off| {
-            offset = off;
+        var entry = ouput.Entry.init(.{
+            .path = sub_path,
+            .compressed_size = compressed_size,
+            .decompressed_size = decompressed_size,
+            .type = .zstd,
+            .checksum = 0, // set this to valid checksum
+        });
+
+        if (map.get(subchunk)) |offset| {
+            entry.setOffset(offset);
+            entry.setDuplicate();
             block.items.len -= compressed_size;
         } else {
-            const header_len = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1) + @sizeOf(toc.Entry.v1) * files.len;
-            offset = @intCast(header_len + block.items.len - compressed_size);
-            map.putAssumeCapacity(subchunk, offset);
+            const offset: u32 = @intCast(header_len + block.items.len - compressed_size);
 
-            if (compressed_size > file_size) blk: {
+            map.putAssumeCapacity(subchunk, offset);
+            entry.setOffset(offset);
+
+            if (compressed_size > decompressed_size) blk: {
                 file.seekTo(0) catch break :blk;
 
-                entry_type = .raw;
+                entry.setType(.raw);
+                entry.setCompressedSize(decompressed_size);
+
                 block.items.len -= compressed_size;
 
-                var unread_bytes = file_size;
+                var unread_bytes = decompressed_size;
                 while (unread_bytes != 0) {
                     const len = @min(read_buffer.len, unread_bytes);
                     try file.reader().readNoEof(read_buffer[0..len]);
@@ -93,39 +102,26 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             }
         }
 
-        entries.appendAssumeCapacity(toc.Entry.v1{
-            .hash = xxhash.XxHash64.hash(0, sub_path),
-            .entry_type = entry_type,
-            .compressed_size = compressed_size,
-            .decompressed_size = file_size,
-            .offset = offset,
-        });
+        entries.appendAssumeCapacity(entry);
     }
 
     // todo: check what is faster sorting paths before hand or sorting entries
-    std.sort.block(toc.Entry.v1, entries.items, {}, struct {
-        fn inner(_: void, a: toc.Entry.v1, b: toc.Entry.v1) bool {
-            return a.hash < b.hash;
+    std.sort.block(ouput.Entry, entries.items, {}, struct {
+        fn inner(_: void, a: ouput.Entry, b: ouput.Entry) bool {
+            return a.raw_entry.hash < b.raw_entry.hash;
         }
     }.inner);
 
     if (entries.items.len != files.len) {
         const sub: u32 = @intCast(files.len - entries.items.len);
         for (entries.items) |*entry| {
-            entry.offset -= sub;
+            entry.raw_entry.offset -= sub;
         }
     }
 
-    try writer.writeStruct(toc.Version{
-        .major = 1,
-        .minor = 0,
-    });
-
-    try writer.writeStruct(toc.Header.v1{
+    try writer.writeStruct(ouput.Header.init(.{
         .entries_len = @intCast(entries.items.len),
-        .entries_size = @sizeOf(toc.Entry.v1),
-        .entries_offset = @sizeOf(toc.Version) + @sizeOf(toc.Header.v1),
-    });
+    }));
 
     try writer.writeAll(mem.sliceAsBytes(entries.items));
     try writer.writeAll(block.items);
