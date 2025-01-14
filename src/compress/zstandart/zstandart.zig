@@ -26,8 +26,8 @@ pub const DecompressError = error{Unexpected};
 
 var stored_allocator: ?Allocator = null;
 
-pub fn decompress(compressed: []const u8, dist: []u8, level: Level) DecompressError!void {
-    const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len, level);
+pub fn decompress(compressed: []const u8, dist: []u8) DecompressError!void {
+    const res = zstd.ZSTD_decompress(dist.ptr, dist.len, compressed.ptr, compressed.len);
     switch (getErrorCode(res)) {
         .NO_ERROR => {},
         else => |err| return unexpectedError(err),

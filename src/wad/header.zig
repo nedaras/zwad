@@ -35,13 +35,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
             const entry: Entry = switch (self.ver) {
                 .v1 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v1);
-                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte & 0x0F) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
                         .compressed_size = entry.compressed_size,
                         .decompressed_size = entry.decompressed_size,
                         .type = entry_type,
-                        .subchunk_len = @intCast(entry.byte & 0x0F),
+                        .subchunk_len = @intCast(entry.byte >> 4),
                         .subchunk_index = 0,
                         .offset = entry.offset,
                         .checksum = null,
@@ -49,13 +49,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
                 .v2 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v2);
-                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte & 0x0F) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
                         .compressed_size = entry.compressed_size,
                         .decompressed_size = entry.decompressed_size,
                         .type = entry_type,
-                        .subchunk_len = @intCast(entry.byte & 0x0F),
+                        .subchunk_len = @intCast(entry.byte >> 4),
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                         .checksum = null,
@@ -63,13 +63,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
                 .v3 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v3);
-                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte & 0x0F) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
                         .compressed_size = entry.compressed_size,
                         .decompressed_size = entry.decompressed_size,
                         .type = entry_type,
-                        .subchunk_len = @intCast(entry.byte & 0x0F),
+                        .subchunk_len = @intCast(entry.byte >> 4),
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                         .checksum = entry.checksum,
@@ -103,7 +103,16 @@ pub fn headerIterator(reader: anytype) !HeaderIterator(@TypeOf(reader)) {
     const entries_len = switch (ver) {
         .v1 => (try reader.readStruct(toc.Header.v1)).entries_len,
         .v2 => (try reader.readStruct(toc.Header.v2)).entries_len,
-        .v3 => (try reader.readStruct(toc.Header.v3)).entries_len,
+        .v3 => blk: {
+            // ok from this knowlage i can safely say that checksum and signature can be generated, but idk how
+            // ** ok it is xxhash64 and it does not hash version or header part
+            // * so it for sure hashes the raw entry, but i get the wrong checksum with bigger files, it is prob cuz we need to xxhash its subchunks too
+            const header = try reader.readStruct(toc.Header.v3);
+
+            //std.debug.print("checksum:  {x}\n", .{header.checksum});
+            //std.debug.print("signature: {s}\n", .{header.ecdsa_signature});
+            break :blk header.entries_len;
+        },
     };
 
     return .{

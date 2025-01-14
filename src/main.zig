@@ -16,7 +16,7 @@ const mem = std.mem;
 const zstd = std.compress.zstd;
 const assert = std.debug.assert;
 
-pub fn main_generate_hashes() !void {
+pub fn ___main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = true }){};
     defer _ = gpa.deinit();
 
@@ -27,7 +27,7 @@ pub fn main_generate_hashes() !void {
     };
     defer client.deinit();
 
-    const uri = try std.Uri.parse("http://raw.communitydragon.org/data/hashes/lol/hashes.game.txt"); // http so there would not be any tls overhead
+    const uri = try std.Uri.parse("https://raw.communitydragon.org/data/hashes/lol/hashes.game.txt"); // http so there would not be any tls overhead
     var server_header_buffer: [16 * 1024]u8 = undefined;
 
     var req = try client.open(.GET, uri, .{
@@ -98,6 +98,98 @@ pub fn main_generate_hashes() !void {
 
     std.debug.print("writting to file: {d}\n", .{final.len});
     try out_file.writeAll(final);
+}
+
+fn loadTOC(allocator: std.mem.Allocator, file: fs.File) !?struct { []const u8, []const u8 } {
+    const header: wad.output.Header = try file.reader().readStruct(wad.output.Header);
+
+    for (0..header.raw_header.entries_len) |_| {
+        const entry: wad.output.Entry = try file.reader().readStruct(wad.output.Entry);
+        if (entry.raw_entry.hash != @import("xxhash.zig").XxHash64.hash(0, "data/final/global.wad.subchunktoc")) continue;
+
+        try file.seekTo(entry.raw_entry.offset);
+
+        const in = try allocator.alloc(u8, entry.raw_entry.compressed_size);
+        errdefer allocator.free(in);
+
+        try file.reader().readNoEof(in);
+
+        const out = try allocator.alloc(u8, entry.raw_entry.decompressed_size);
+        errdefer allocator.free(out);
+
+        try @import("compress/zstandart/zstandart.zig").decompress(in, out);
+
+        try file.seekTo(0);
+        return .{ out, in };
+    }
+    try file.seekTo(0);
+    return null;
+}
+
+pub fn __main() !void {
+    //const file = try fs.cwd().openFile("CommonLEVELS.wad.client", .{}); // why does this work?
+    const file = try fs.cwd().openFile("TFTChampion.wad.client", .{});
+    defer file.close();
+
+    //const toc, const toc_comp = (try loadTOC(std.heap.page_allocator, file)).?;
+    //defer std.heap.page_allocator.free(toc);
+
+    //var toc_stream = io.fixedBufferStream(toc);
+
+    var checksum = @import("xxhash.zig").XxHash64.init(0);
+    const header: wad.output.Header = try file.reader().readStruct(wad.output.Header);
+
+    std.debug.print("checksum: {x}\n", .{header.raw_header.checksum});
+
+    // not working with subchunks mb we can just set subchunks to zero
+    for (0..header.raw_header.entries_len) |_| {
+        const entry: wad.output.Entry = try file.reader().readStruct(wad.output.Entry);
+        //const raw_entry: [32]u8 = @bitCast(entry);
+        const subchunk_len = entry.raw_entry.byte >> 4;
+
+        const perfect_entry = @import("wad/toc.zig").LatestEntry{
+            .hash = entry.raw_entry.hash,
+            .offset = entry.raw_entry.offset,
+            .decompressed_size = entry.raw_entry.decompressed_size,
+            .compressed_size = entry.raw_entry.compressed_size,
+            .byte = entry.raw_entry.byte,
+            .duplicate = false,
+            .subchunk_index = 0,
+            .checksum = entry.raw_entry.checksum,
+        };
+        const raw_entry: [32]u8 = @bitCast(perfect_entry);
+
+        if (entry.raw_entry.duplicate) {
+            unreachable;
+        }
+
+        //if (entry.raw_entry.hash == @import("xxhash.zig").XxHash64.hash(0, "data/final/global.wad.subchunktoc")) {
+        //continue;
+        //}
+        checksum.update(&raw_entry);
+
+        if (subchunk_len > 0) {
+            unreachable;
+        }
+
+        //checksum.update(&raw_entry);
+        //const subchunk_len = entry.raw_entry.byte >> 4;
+        //if (subchunk_len > 0) {
+        //try toc_stream.seekTo(@as(u64, entry.raw_entry.subchunk_index) * 16);
+        //for (0..subchunk_len) |_| {
+        //var raw_subchunk: [16]u8 = undefined;
+        //try toc_stream.reader().readNoEof(&raw_subchunk);
+        //checksum.update(&raw_subchunk);
+        //}
+        //}
+        //checksum.update(&raw_entry);
+    }
+
+    //_ = toc_comp;
+    //checksum.update(toc);
+
+    //_ = toc_comp[0];
+    std.debug.print("mysum:    {x}\n", .{checksum.final()});
 }
 
 // todo: findout how does league of legends create them header checksums
