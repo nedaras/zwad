@@ -20,14 +20,10 @@ pub fn XxHash3(bits: comptime_int) type {
 
         pub fn init() Self {
             var state: xxhash.XXH3_state_t = undefined;
-            reset(&state);
+            assert(xxhash.XXH3_64bits_reset(&state) == .XXH_OK);
             return .{
                 .state = state,
             };
-        }
-
-        pub inline fn reset(self: *Self) void {
-            assert(xxhash.XXH3_64bits_reset(&self.state) == .XXH_OK);
         }
 
         pub fn update(self: *Self, input: []const u8) void {

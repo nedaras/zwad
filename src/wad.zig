@@ -47,8 +47,8 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
         pub const Entry = struct {
             hash: u64,
-            compressed_len: u32,
-            decompressed_len: u32,
+            compressed_size: u32,
+            decompressed_size: u32,
 
             subchunk_len: u4,
             subchunk_index: u16,
@@ -155,16 +155,16 @@ pub fn StreamIterator(comptime ReaderType: type) type {
 
                 // todo: check if duplication can be verfied
                 if (entry.offset == prev_entry.offset) {
-                    if (entry.compressed_len != prev_entry.compressed_len) return error.InvalidFile;
-                    if (entry.decompressed_len != prev_entry.decompressed_len) return error.InvalidFile;
+                    if (entry.compressed_size != prev_entry.compressed_size) return error.InvalidFile;
+                    if (entry.decompressed_size != prev_entry.decompressed_size) return error.InvalidFile;
                     if (entry.type != prev_entry.type) return error.InvalidFile;
                     if (entry.type != prev_entry.type) return error.InvalidFile;
                     if (entry.checksum != prev_entry.checksum) return error.InvalidFile;
 
                     return .{
                         .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
+                        .compressed_size = entry.compressed_size,
+                        .decompressed_size = entry.decompressed_size,
                         .subchunk_len = entry.subchunk_len,
                         .subchunk_index = entry.subchunk_index,
                         .checksum = entry.checksum,
@@ -175,24 +175,24 @@ pub fn StreamIterator(comptime ReaderType: type) type {
                 }
 
                 // todo: check for overflows
-                const skip = entry.offset - prev_entry.offset - prev_entry.compressed_len + self.unread_file_bytes;
+                const skip = entry.offset - prev_entry.offset - prev_entry.compressed_size + self.unread_file_bytes;
                 if (skip > 0) {
                     try self.reader.skipBytes(skip, .{});
                 }
             }
 
-            self.unread_file_bytes = entry.compressed_len;
-            self.available_file_bytes = entry.decompressed_len;
+            self.unread_file_bytes = entry.compressed_size;
+            self.available_file_bytes = entry.decompressed_size;
 
             if (entry.type == .zstd or entry.type == .zstd_multi) {
-                self.zstd.unread_bytes = entry.compressed_len;
-                self.zstd.available_bytes = entry.decompressed_len;
+                self.zstd.unread_bytes = entry.compressed_size;
+                self.zstd.available_bytes = entry.decompressed_size;
             }
 
             return .{
                 .hash = entry.hash,
-                .compressed_len = entry.compressed_len,
-                .decompressed_len = entry.decompressed_len,
+                .compressed_size = entry.compressed_size,
+                .decompressed_size = entry.decompressed_size,
                 .subchunk_len = entry.subchunk_len,
                 .subchunk_index = entry.subchunk_index,
                 .checksum = entry.checksum,

@@ -1,5 +1,5 @@
 pub const LatestHeader = Header.v3;
-pub const LatestEntry = Entry.v3_4;
+pub const LatestEntry = Entry.v3;
 
 pub const Version = extern struct {
     magic: [2]u8 = [_]u8{ 'R', 'W' },
@@ -39,58 +39,32 @@ pub const Header = struct {
 };
 
 pub const Entry = struct {
-    pub const v1 = packed struct {
+    pub const v1 = extern struct {
         hash: u64,
         offset: u32,
-        compressed_len: u32,
-        decompressed_len: u32,
-        entry_type: EntryType,
-        pad: u28 = 0,
+        compressed_size: u32,
+        decompressed_size: u32,
+        byte: u8,
+        pad: [3]u8 = [_]u8{ 0, 0, 0 },
     };
 
-    pub const v2 = packed struct {
+    pub const v2 = extern struct {
         hash: u64,
         offset: u32,
-        compressed_len: u32,
-        decompressed_len: u32,
-        entry_type: EntryType,
-        subchunk_len: u4,
-        duplicate: u8,
+        compressed_size: u32,
+        decompressed_size: u32,
+        byte: u8,
+        duplicate: bool,
         subchunk_index: u16,
     };
 
-    pub const v3 = packed struct {
+    pub const v3 = extern struct {
         hash: u64,
         offset: u32,
-        compressed_len: u32,
-        decompressed_len: u32,
-        entry_type: EntryType,
-        subchunk_len: u4,
-        duplicate: u8,
-        subchunk_index: u16,
-        checksum: u64,
-    };
-
-    pub const v3_3 = packed struct {
-        hash: u64,
-        offset: u32,
-        compressed_len: u32,
-        decompressed_len: u32,
-        entry_type: EntryType,
-        subchunk_len: u4,
-        duplicate: u8,
-        subchunk_index: u16,
-        checksum: u64,
-    };
-
-    pub const v3_4 = packed struct {
-        hash: u64,
-        offset: u32,
-        compressed_len: u32,
-        decompressed_len: u32,
-        entry_type: EntryType,
-        subchunk_len: u4,
-        duplicate: u8,
+        compressed_size: u32,
+        decompressed_size: u32,
+        byte: u8,
+        duplicate: bool,
         subchunk_index: u16,
         checksum: u64,
     };

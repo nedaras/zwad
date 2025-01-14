@@ -1,42 +1,29 @@
 const std = @import("std");
+const toc = @import("toc.zig");
+const xxhash = @import("../xxhash.zig");
+const ascii = std.ascii;
 
 pub const Header = extern struct {
-    magic: [2]u8,
-    version: [2]u8,
-    ecdsa_signature: [256]u8,
-    checksum: [8]u8,
-    entries_len: u32,
+    version: toc.Version,
+    raw_header: toc.LatestHeader,
 
-    pub fn init() Header {
-        var ret = std.mem.zeroes(Header);
-        ret.magic = [_]u8{ 'R', 'W' };
-        ret.version = [_]u8{ 3, 4 };
-        return ret;
-    }
+    pub const Options = struct {
+        entries_len: u32 = 0,
+    };
 
-    pub inline fn setSize(self: *Header, size: u32) void {
-        self.entries_len = size;
-    }
+    pub fn init(options: Options) Header {
+        var header = std.mem.zeroes(toc.LatestHeader);
+        header.entries_len = options.entries_len;
 
-    pub fn updateChecksum(self: *Header) void {
-        const offset = @sizeOf(Header);
-        _ = offset;
-        _ = self;
-        @panic("idk how");
+        return .{
+            .version = .{ .major = 3, .minor = 4 },
+            .raw_header = header,
+        };
     }
 };
 
 pub const Entry = extern struct {
-    hash: u64,
-    offset: u32,
-    compressed_len: u32,
-    decompressed_len: u32,
-    pad: [4]u8,
-    checksum: u64,
+    raw_entry: toc.LatestEntry,
 
-    pub fn init(offset: u32) Entry {
-        var ret = std.mem.zeroes(Entry);
-        ret.offset = offset;
-        return ret;
-    }
+    pub fn init() Entry {}
 };

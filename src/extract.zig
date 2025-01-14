@@ -151,11 +151,11 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
         }
 
         if (entry.type == .zstd or entry.type == .zstd_multi) {
-            zstd_stream.available_bytes = entry.decompressed_len;
-            zstd_stream.unread_bytes = entry.compressed_len;
+            zstd_stream.available_bytes = entry.decompressed_size;
+            zstd_stream.unread_bytes = entry.compressed_size;
         }
 
-        var write_len: usize = entry.decompressed_len;
+        var write_len: usize = entry.decompressed_size;
         while (write_len != 0) {
             const buf = write_buffer[0..@min(write_buffer.len, write_len)];
             _ = switch (entry.type) {
@@ -186,7 +186,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             writer.writeByte('\n') catch return;
         }
 
-        bytes_handled = entry.offset + entry.compressed_len;
+        bytes_handled = entry.offset + entry.compressed_size;
     }
 }
 
@@ -278,7 +278,7 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
         };
         defer write_file.close();
 
-        var write_len: u32 = entry.decompressed_len;
+        var write_len: u32 = entry.decompressed_size;
         while (write_len != 0) {
             const buf = write_buffer[0..@min(write_buffer.len, write_len)];
             entry.reader().readNoEof(buf) catch |err| {

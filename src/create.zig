@@ -6,6 +6,7 @@ const io = std.io;
 const fs = std.fs;
 const math = std.math;
 const mem = std.mem;
+const ouput = wad.output;
 const Allocator = mem.Allocator;
 const Options = @import("cli.zig").Options;
 const assert = std.debug.assert;
@@ -95,8 +96,8 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         entries.appendAssumeCapacity(toc.Entry.v1{
             .hash = xxhash.XxHash64.hash(0, sub_path),
             .entry_type = entry_type,
-            .compressed_len = compressed_size,
-            .decompressed_len = file_size,
+            .compressed_size = compressed_size,
+            .decompressed_size = file_size,
             .offset = offset,
         });
     }

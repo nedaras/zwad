@@ -5,8 +5,8 @@ const Version = version.Version;
 
 pub const Entry = struct {
     hash: u64,
-    compressed_len: u32,
-    decompressed_len: u32,
+    compressed_size: u32,
+    decompressed_size: u32,
     type: toc.EntryType,
     subchunk_len: u4,
     subchunk_index: u16,
@@ -35,12 +35,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
             const entry: Entry = switch (self.ver) {
                 .v1 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v1);
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
-                        .type = entry.entry_type,
-                        .subchunk_len = 0,
+                        .compressed_size = entry.compressed_size,
+                        .decompressed_size = entry.decompressed_size,
+                        .type = entry_type,
+                        .subchunk_len = @intCast(entry.byte & 0x0F),
                         .subchunk_index = 0,
                         .offset = entry.offset,
                         .checksum = null,
@@ -48,12 +49,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
                 .v2 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v2);
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
-                        .type = entry.entry_type,
-                        .subchunk_len = entry.subchunk_len,
+                        .compressed_size = entry.compressed_size,
+                        .decompressed_size = entry.decompressed_size,
+                        .type = entry_type,
+                        .subchunk_len = @intCast(entry.byte & 0x0F),
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                         .checksum = null,
@@ -61,38 +63,13 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 },
                 .v3 => blk: {
                     const entry = try self.reader.readStruct(toc.Entry.v3);
+                    const entry_type = std.meta.intToEnum(toc.EntryType, entry.byte >> 4) catch return error.InvalidFile;
                     break :blk .{
                         .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
-                        .type = entry.entry_type,
-                        .subchunk_len = entry.subchunk_len,
-                        .subchunk_index = entry.subchunk_index,
-                        .offset = entry.offset,
-                        .checksum = entry.checksum,
-                    };
-                },
-                .v3_3 => blk: {
-                    const entry = try self.reader.readStruct(toc.Entry.v3_3);
-                    break :blk .{
-                        .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
-                        .type = entry.entry_type,
-                        .subchunk_len = entry.subchunk_len,
-                        .subchunk_index = entry.subchunk_index,
-                        .offset = entry.offset,
-                        .checksum = entry.checksum,
-                    };
-                },
-                .v3_4 => blk: {
-                    const entry = try self.reader.readStruct(toc.Entry.v3_4);
-                    break :blk .{
-                        .hash = entry.hash,
-                        .compressed_len = entry.compressed_len,
-                        .decompressed_len = entry.decompressed_len,
-                        .type = entry.entry_type,
-                        .subchunk_len = entry.subchunk_len,
+                        .compressed_size = entry.compressed_size,
+                        .decompressed_size = entry.decompressed_size,
+                        .type = entry_type,
+                        .subchunk_len = @intCast(entry.byte & 0x0F),
                         .subchunk_index = entry.subchunk_index,
                         .offset = entry.offset,
                         .checksum = entry.checksum,
@@ -104,8 +81,8 @@ pub fn HeaderIterator(comptime ReaderType: type) type {
                 return error.InvalidFile;
             }
 
-            if (entry.decompressed_len > 4 * gb) return error.InvalidFile;
-            if (entry.compressed_len > 4 * gb) return error.InvalidFile;
+            if (entry.decompressed_size > 4 * gb) return error.InvalidFile;
+            if (entry.compressed_size > 4 * gb) return error.InvalidFile;
             if (entry.offset > 4 * gb) return error.InvalidFile;
 
             self.index += 1;
@@ -126,7 +103,7 @@ pub fn headerIterator(reader: anytype) !HeaderIterator(@TypeOf(reader)) {
     const entries_len = switch (ver) {
         .v1 => (try reader.readStruct(toc.Header.v1)).entries_len,
         .v2 => (try reader.readStruct(toc.Header.v2)).entries_len,
-        .v3, .v3_3, .v3_4 => (try reader.readStruct(toc.Header.v3)).entries_len,
+        .v3 => (try reader.readStruct(toc.Header.v3)).entries_len,
     };
 
     return .{
@@ -145,9 +122,7 @@ fn getVersion(reader: anytype) !Version {
         1 => if (ver.minor != 0) return error.UnknownVersion else .v1,
         2 => if (ver.minor != 0) return error.UnknownVersion else .v2,
         3 => return switch (ver.minor) {
-            0 => .v3,
-            3 => .v3_3,
-            4 => .v3_4,
+            0, 1, 2, 3, 4 => .v3,
             else => return error.UnknownVersion,
         },
         else => return error.UnknownVersion,
