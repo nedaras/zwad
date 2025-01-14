@@ -126,9 +126,9 @@ fn loadTOC(allocator: std.mem.Allocator, file: fs.File) !?struct { []const u8, [
     return null;
 }
 
-pub fn __main() !void {
+pub fn main() !void {
     //const file = try fs.cwd().openFile("CommonLEVELS.wad.client", .{}); // why does this work?
-    const file = try fs.cwd().openFile("TFTChampion.wad.client", .{});
+    const file = try fs.cwd().openFile("Global.wad.client", .{});
     defer file.close();
 
     //const toc, const toc_comp = (try loadTOC(std.heap.page_allocator, file)).?;
@@ -139,57 +139,36 @@ pub fn __main() !void {
     var checksum = @import("xxhash.zig").XxHash64.init(0);
     const header: wad.output.Header = try file.reader().readStruct(wad.output.Header);
 
-    std.debug.print("checksum: {x}\n", .{header.raw_header.checksum});
+    std.debug.print("signature: {s}\n", .{header.raw_header.ecdsa_signature});
+    std.debug.print("checksum:  {x}\n", .{header.raw_header.checksum});
+
+    const toc = @import("wad/toc.zig");
+
+    var entries = std.ArrayList(toc.LatestEntry).init(std.heap.page_allocator);
+    defer entries.deinit();
 
     // not working with subchunks mb we can just set subchunks to zero
     for (0..header.raw_header.entries_len) |_| {
-        const entry: wad.output.Entry = try file.reader().readStruct(wad.output.Entry);
-        //const raw_entry: [32]u8 = @bitCast(entry);
-        const subchunk_len = entry.raw_entry.byte >> 4;
+        const entry = try file.reader().readStruct(toc.LatestEntry);
+        try entries.append(entry);
+    }
 
-        const perfect_entry = @import("wad/toc.zig").LatestEntry{
-            .hash = entry.raw_entry.hash,
-            .offset = entry.raw_entry.offset,
-            .decompressed_size = entry.raw_entry.decompressed_size,
-            .compressed_size = entry.raw_entry.compressed_size,
-            .byte = entry.raw_entry.byte,
-            .duplicate = false,
-            .subchunk_index = 0,
-            .checksum = entry.raw_entry.checksum,
-        };
-        const raw_entry: [32]u8 = @bitCast(perfect_entry);
-
-        if (entry.raw_entry.duplicate) {
-            unreachable;
+    std.sort.block(toc.LatestEntry, entries.items, {}, struct {
+        fn inner(_: void, a: toc.LatestEntry, b: toc.LatestEntry) bool {
+            return a.offset < b.offset;
         }
+    }.inner);
 
-        //if (entry.raw_entry.hash == @import("xxhash.zig").XxHash64.hash(0, "data/final/global.wad.subchunktoc")) {
-        //continue;
-        //}
-        checksum.update(&raw_entry);
-
-        if (subchunk_len > 0) {
-            unreachable;
-        }
-
-        //checksum.update(&raw_entry);
-        //const subchunk_len = entry.raw_entry.byte >> 4;
-        //if (subchunk_len > 0) {
-        //try toc_stream.seekTo(@as(u64, entry.raw_entry.subchunk_index) * 16);
-        //for (0..subchunk_len) |_| {
-        //var raw_subchunk: [16]u8 = undefined;
-        //try toc_stream.reader().readNoEof(&raw_subchunk);
-        //checksum.update(&raw_subchunk);
-        //}
-        //}
-        //checksum.update(&raw_entry);
+    for (entries.items) |entry| {
+        const raw: [32]u8 = @bitCast(entry);
+        checksum.update(&raw);
     }
 
     //_ = toc_comp;
     //checksum.update(toc);
 
     //_ = toc_comp[0];
-    std.debug.print("mysum:    {x}\n", .{checksum.final()});
+    std.debug.print("mysum:     {x}\n", .{checksum.final()});
 }
 
 // todo: findout how does league of legends create them header checksums
@@ -198,7 +177,7 @@ pub fn __main() !void {
 
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 // todo: we need a way to test our application fuzzing would be the best way
-pub fn main() !void {
+pub fn _main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 
