@@ -15,16 +15,22 @@ pub const Header = extern struct {
 
     pub const Options = struct {
         entries_len: u32 = 0,
+        checksum: u64 = 0,
     };
 
     pub fn init(options: Options) Header {
-        var header = std.mem.zeroes(toc.LatestHeader);
-        header.entries_len = options.entries_len;
-
         return .{
             .version = .{ .major = 3, .minor = 4 },
-            .raw_header = header,
+            .raw_header = .{
+                .ecdsa_signature = std.mem.zeroes([256]u8),
+                .checksum = options.checksum,
+                .entries_len = options.entries_len,
+            },
         };
+    }
+
+    pub inline fn setChecksum(self: *Header, checksum: u64) void {
+        self.raw_header.checksum = checksum;
     }
 
     pub fn setEntriesLen(self: *Header, entries: u32) void {
@@ -82,7 +88,7 @@ pub const Entry = extern struct {
     }
 
     pub inline fn setType(self: *Entry, entry_type: toc.EntryType) void {
-        self.raw_entry.byte |= @as(u8, @intFromEnum(entry_type)) << 4;
+        self.raw_entry.byte = (self.raw_entry.byte & 0xF0) | @intFromEnum(entry_type);
     }
 
     pub inline fn setDuplicate(self: *Entry) void {

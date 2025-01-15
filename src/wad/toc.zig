@@ -24,7 +24,7 @@ pub const Header = struct {
 
     pub const v2 = extern struct {
         ecdsa_signature_len: u8,
-        ecdsa_signature: [83]u8,
+        ecdsa_signature: [83]u8, // have no idea how do these work
         checksum: u64 align(1),
         entries_offset: u16,
         entries_size: u16,
@@ -32,7 +32,7 @@ pub const Header = struct {
     };
 
     pub const v3 = extern struct {
-        ecdsa_signature: [256]u8,
+        ecdsa_signature: [256]u8, // have no idea how do these work
         checksum: u64 align(1),
         entries_len: u32,
     };
@@ -64,7 +64,7 @@ pub const Entry = struct {
         compressed_size: u32,
         decompressed_size: u32,
         byte: u8,
-        duplicate: bool,
+        duplicate: bool, // from v3_4 there is no duplicate but smth with subchunks
         subchunk_index: u16,
         checksum: u64,
     };

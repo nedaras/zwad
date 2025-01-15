@@ -44,6 +44,8 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     try offsets.ensureTotalCapacity(@intCast(files.len));
 
     const header_len = @sizeOf(ouput.Header) + @sizeOf(ouput.Entry) * files.len;
+
+    var header_checksum = xxhash.XxHash64.init(0);
     for (files) |sub_path| {
         const file = try fs.cwd().openFile(sub_path, .{});
         defer file.close();
@@ -75,7 +77,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
         if (offsets.get(checksum)) |offset| {
             entry.setOffset(offset);
-            entry.setDuplicate();
+            //entry.setDuplicate(); // nu such thing in latest entries
             block.items.len -= compressed_size;
         } else {
             const offset: u32 = @intCast(header_len + block.items.len - compressed_size);
@@ -83,7 +85,11 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             offsets.putAssumeCapacity(checksum, offset);
             entry.setOffset(offset);
 
-            if (compressed_size > decompressed_size) blk: {
+            if (compressed_size >= decompressed_size) blk: {
+                if (decompressed_size == 0) {
+                    entry.setType(.raw);
+                    break :blk;
+                }
                 file.seekTo(0) catch break :blk;
 
                 entry.setType(.raw);
@@ -102,6 +108,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             }
         }
 
+        header_checksum.update(mem.asBytes(&entry));
         entries.appendAssumeCapacity(entry);
     }
 
@@ -113,6 +120,9 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     }.inner);
 
     if (entries.items.len != files.len) {
+        if (true) {
+            @panic("update checksum");
+        }
         const sub: u32 = @intCast(files.len - entries.items.len);
         for (entries.items) |*entry| {
             entry.raw_entry.offset -= sub;
@@ -120,6 +130,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     }
 
     try writer.writeStruct(ouput.Header.init(.{
+        .checksum = header_checksum.final(),
         .entries_len = @intCast(entries.items.len),
     }));
 

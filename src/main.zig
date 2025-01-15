@@ -100,84 +100,9 @@ pub fn ___main() !void {
     try out_file.writeAll(final);
 }
 
-fn loadTOC(allocator: std.mem.Allocator, file: fs.File) !?struct { []const u8, []const u8 } {
-    const header: wad.output.Header = try file.reader().readStruct(wad.output.Header);
-
-    for (0..header.raw_header.entries_len) |_| {
-        const entry: wad.output.Entry = try file.reader().readStruct(wad.output.Entry);
-        if (entry.raw_entry.hash != @import("xxhash.zig").XxHash64.hash(0, "data/final/global.wad.subchunktoc")) continue;
-
-        try file.seekTo(entry.raw_entry.offset);
-
-        const in = try allocator.alloc(u8, entry.raw_entry.compressed_size);
-        errdefer allocator.free(in);
-
-        try file.reader().readNoEof(in);
-
-        const out = try allocator.alloc(u8, entry.raw_entry.decompressed_size);
-        errdefer allocator.free(out);
-
-        try @import("compress/zstandart/zstandart.zig").decompress(in, out);
-
-        try file.seekTo(0);
-        return .{ out, in };
-    }
-    try file.seekTo(0);
-    return null;
-}
-
-pub fn main() !void {
-    //const file = try fs.cwd().openFile("CommonLEVELS.wad.client", .{}); // why does this work?
-    const file = try fs.cwd().openFile("Global.wad.client", .{});
-    defer file.close();
-
-    //const toc, const toc_comp = (try loadTOC(std.heap.page_allocator, file)).?;
-    //defer std.heap.page_allocator.free(toc);
-
-    //var toc_stream = io.fixedBufferStream(toc);
-
-    var checksum = @import("xxhash.zig").XxHash64.init(0);
-    const header: wad.output.Header = try file.reader().readStruct(wad.output.Header);
-
-    std.debug.print("signature: {s}\n", .{header.raw_header.ecdsa_signature});
-    std.debug.print("checksum:  {x}\n", .{header.raw_header.checksum});
-
-    const toc = @import("wad/toc.zig");
-
-    var entries = std.ArrayList(toc.LatestEntry).init(std.heap.page_allocator);
-    defer entries.deinit();
-
-    // not working with subchunks mb we can just set subchunks to zero
-    for (0..header.raw_header.entries_len) |_| {
-        const entry = try file.reader().readStruct(toc.LatestEntry);
-        try entries.append(entry);
-    }
-
-    std.sort.block(toc.LatestEntry, entries.items, {}, struct {
-        fn inner(_: void, a: toc.LatestEntry, b: toc.LatestEntry) bool {
-            return a.offset < b.offset;
-        }
-    }.inner);
-
-    for (entries.items) |entry| {
-        const raw: [32]u8 = @bitCast(entry);
-        checksum.update(&raw);
-    }
-
-    //_ = toc_comp;
-    //checksum.update(toc);
-
-    //_ = toc_comp[0];
-    std.debug.print("mysum:     {x}\n", .{checksum.final()});
-}
-
-// todo: findout how does league of legends create them header checksums
-//   * find a file that has no duplicates and no subchunks and try to guess
-//   * or mb we need to reverse it inside league of legends itself, there prob is some verify function
-
 // add a wraper that would handle HandleErrors, like if unexpected link github where they could submit those errors
 // todo: we need a way to test our application fuzzing would be the best way
-pub fn _main() !void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .verbose_log = false }){};
     defer _ = gpa.deinit();
 

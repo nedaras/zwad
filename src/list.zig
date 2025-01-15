@@ -69,7 +69,7 @@ fn _list(reader: anytype, options: Options) HandleError!void {
                 .link => "link",
                 .zstd, .zstd_multi => "zstd",
             };
-            writer.print("{s} {d: >7} {d: >2} {d: >5} ", .{ type_name, entry.decompressed_size, entry.subchunk_len, entry.subchunk_index }) catch return;
+            writer.print("{s} {d: >7} ", .{ type_name, entry.decompressed_size }) catch return;
         }
 
         if (path) |p| {

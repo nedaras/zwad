@@ -103,16 +103,7 @@ pub fn headerIterator(reader: anytype) !HeaderIterator(@TypeOf(reader)) {
     const entries_len = switch (ver) {
         .v1 => (try reader.readStruct(toc.Header.v1)).entries_len,
         .v2 => (try reader.readStruct(toc.Header.v2)).entries_len,
-        .v3 => blk: {
-            // ok from this knowlage i can safely say that checksum and signature can be generated, but idk how
-            // ** ok it is xxhash64 and it does not hash version or header part
-            // * so it for sure hashes the raw entry, but i get the wrong checksum with bigger files, it is prob cuz we need to xxhash its subchunks too
-            const header = try reader.readStruct(toc.Header.v3);
-
-            //std.debug.print("checksum:  {x}\n", .{header.checksum});
-            //std.debug.print("signature: {s}\n", .{header.ecdsa_signature});
-            break :blk header.entries_len;
-        },
+        .v3 => (try reader.readStruct(toc.Header.v3)).entries_len,
     };
 
     return .{
