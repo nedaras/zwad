@@ -26,6 +26,10 @@ pub fn XxHash3(bits: comptime_int) type {
             };
         }
 
+        pub inline fn reset(self: *Self) void {
+            assert(xxhash.XXH3_64bits_reset(&self.state) == .XXH_OK);
+        }
+
         pub fn update(self: *Self, input: []const u8) void {
             if (bits == 128) {
                 assert(xxhash.XXH3_128bits_update(&self.state, input.ptr, input.len) == .XXH_OK);
@@ -63,6 +67,10 @@ pub const XxHash64 = struct {
 
     pub inline fn update(self: *Self, input: []const u8) void {
         assert(xxhash.XXH64_update(&self.state, input.ptr, input.len) == .XXH_OK);
+    }
+
+    pub inline fn reset(self: *Self, seed: u64) void {
+        assert(xxhash.XXH64_reset(&self.state, seed) == .XXH_OK);
     }
 
     pub inline fn final(self: *const Self) u64 {

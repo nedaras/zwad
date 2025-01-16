@@ -11,29 +11,17 @@ const Allocator = mem.Allocator;
 const Options = @import("cli.zig").Options;
 const assert = std.debug.assert;
 
-// wtf are subchunks?
-// subchunks are an file that has .subchunk at the end
-// and cuz of that its bad so we should just ignore subchunks and someone using our abi should only create subchunks
-// cuz firstly if we do not know the file name how can we know what subchunk it has? cuz files can be renamed, but .subchunk toc will not chnage
-//   * tough we could bake in like hash 0 would store the subchunks hash or smth
-// and sucendly we do no know what can be subchunked for what i know now .tex files are subchunkuble cuz of bitoffsetss
 // we just need to hope that legue will accept our zstd_multi converted to zstd only and make an abi that would allow to add subchunks
 pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
-    const stdout = io.getStdOut();
-    const writer = stdout.writer();
-
     if (files.len == 0) {
         return;
     }
 
+    const stdout = io.getStdOut();
+    const writer = stdout.writer();
+
     var block = std.ArrayList(u8).init(allocator);
     defer block.deinit();
-
-    var read_buffer: [1 << 17]u8 = undefined;
-    var window_buffer: [1 << 17]u8 = undefined;
-
-    var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
-    defer zstd_stream.deinit();
 
     var entries = try std.ArrayList(ouput.Entry).initCapacity(allocator, files.len);
     defer entries.deinit();
@@ -45,44 +33,46 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
     const header_len = @sizeOf(ouput.Header) + @sizeOf(ouput.Entry) * files.len;
 
-    var header_checksum = xxhash.XxHash64.init(0);
+    var read_buffer: [1 << 17]u8 = undefined;
+    var window_buffer: [1 << 17]u8 = undefined;
+
+    var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
+    defer zstd_stream.deinit();
+
+    var checksum = xxhash.XxHash64.init(0);
     for (files) |sub_path| {
         const file = try fs.cwd().openFile(sub_path, .{});
         defer file.close();
 
+        // add more then bla bla bla
+
         const decompressed_size: u32 = @intCast(try file.getEndPos());
-
         zstd_stream.setFrameSize(decompressed_size);
-
-        var hash = xxhash.XxHash3(64).init();
 
         var compressed_size: u32 = 0;
         while (true) {
             const amt = try file.read(&read_buffer);
             if (amt == 0) break;
-
-            hash.update(read_buffer[0..amt]);
             compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
         }
 
-        const checksum = hash.final(); // we need to checksum compressed data
-
+        // bench what is faster this, or wraped checksum writer
+        const entry_checksum = xxhash.XxHash3(64).hash(block.items[block.items.len - compressed_size ..]);
         var entry = ouput.Entry.init(.{
             .path = sub_path,
             .compressed_size = compressed_size,
             .decompressed_size = decompressed_size,
             .type = .zstd,
-            .checksum = 0, // set this to valid checksum
+            .checksum = entry_checksum,
         });
 
-        if (offsets.get(checksum)) |offset| {
+        if (offsets.get(entry_checksum)) |offset| {
             entry.setOffset(offset);
-            //entry.setDuplicate(); // nu such thing in latest entries
             block.items.len -= compressed_size;
         } else {
             const offset: u32 = @intCast(header_len + block.items.len - compressed_size);
 
-            offsets.putAssumeCapacity(checksum, offset);
+            offsets.putAssumeCapacity(entry_checksum, offset);
             entry.setOffset(offset);
 
             if (compressed_size >= decompressed_size) blk: {
@@ -108,7 +98,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             }
         }
 
-        header_checksum.update(mem.asBytes(&entry));
+        checksum.update(mem.asBytes(&entry));
         entries.appendAssumeCapacity(entry);
     }
 
@@ -120,17 +110,17 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     }.inner);
 
     if (entries.items.len != files.len) {
-        if (true) {
-            @panic("update checksum");
-        }
         const sub: u32 = @intCast(files.len - entries.items.len);
+        checksum.reset(0);
+
         for (entries.items) |*entry| {
             entry.raw_entry.offset -= sub;
+            checksum.update(mem.asBytes(entry));
         }
     }
 
     try writer.writeStruct(ouput.Header.init(.{
-        .checksum = header_checksum.final(),
+        .checksum = checksum.final(),
         .entries_len = @intCast(entries.items.len),
     }));
 
@@ -138,4 +128,39 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     try writer.writeAll(block.items);
 
     _ = options;
+}
+
+fn ChecksumWriter(comptime WriterType: type) type {
+    return struct {
+        source: WriterType,
+        hash: xxhash.XxHash3(64),
+
+        const Self = @This();
+
+        fn init(wt: WriterType) Self {
+            return .{
+                .source = wt,
+                .hash = xxhash.XxHash3(64).init(),
+            };
+        }
+
+        const Writer = io.Writer(*Self, WriterType.Error, write);
+
+        fn write(self: *Self, input: []const u8) WriterType.Error!usize {
+            self.source.write(input);
+            self.hash.update(input);
+        }
+
+        fn writer(self: *Self) Writer {
+            return .{ .context = self };
+        }
+
+        inline fn final(self: Self) u64 {
+            return self.final();
+        }
+    };
+}
+
+fn checksumWriter(writer: anytype) ChecksumWriter(@TypeOf(writer)) {
+    return ChecksumWriter(@TypeOf(writer)).init(writer);
 }
