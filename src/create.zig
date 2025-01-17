@@ -2,6 +2,8 @@ const std = @import("std");
 const wad = @import("wad.zig");
 const compress = @import("compress.zig");
 const xxhash = @import("xxhash.zig");
+const logger = @import("logger.zig");
+const handled = @import("handled.zig");
 const io = std.io;
 const fs = std.fs;
 const math = std.math;
@@ -9,13 +11,21 @@ const mem = std.mem;
 const ouput = wad.output;
 const Allocator = mem.Allocator;
 const Options = @import("cli.zig").Options;
+const HandleError = handled.HandleError;
 const assert = std.debug.assert;
 
 // we just need to hope that legue will accept our zstd_multi converted to zstd only and make an abi that would allow to add subchunks
+// todo: handle BrokenPipe errors
 pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
     if (files.len == 0) {
         return;
     }
+
+    if (files.len > wad.max_entries_len) {
+        return logger.fatal("Argument list too long", .{});
+    }
+
+    // add check if amount of files can even be created
 
     const stdout = io.getStdOut();
     const writer = stdout.writer();
@@ -41,12 +51,20 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
     var checksum = xxhash.XxHash64.init(0);
     for (files) |sub_path| {
-        const file = try fs.cwd().openFile(sub_path, .{});
+        const stat = fs.cwd().statFile(sub_path) catch |err| return logger.errprint(err, "{s}: Cannot stat", .{sub_path});
+        if (stat.kind == .directory) {
+            return logger.errprint(error.IsDir, "{s}: Cannot open", .{sub_path});
+        }
+
+        // todo: Check if maping is faster
+        const file = fs.cwd().openFile(sub_path, .{}) catch |err| return logger.errprint(err, "{s}: Cannot open", .{sub_path});
         defer file.close();
 
-        // add more then bla bla bla
+        if (stat.size > wad.max_file_size) {
+            return logger.fatal("File size exceeded archive format limit", .{});
+        }
 
-        const decompressed_size: u32 = @intCast(try file.getEndPos());
+        const decompressed_size: u32 = @intCast(stat.size);
         zstd_stream.setFrameSize(decompressed_size);
 
         var compressed_size: u32 = 0;
@@ -55,6 +73,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             if (amt == 0) break;
             compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
         }
+        // add a check if block size did not exceeded it max size
 
         // bench what is faster this, or wraped checksum writer
         const entry_checksum = xxhash.XxHash3(64).hash(block.items[block.items.len - compressed_size ..]);
@@ -96,6 +115,11 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
                     unread_bytes -= @intCast(len);
                 }
             }
+        }
+
+        const max_block_size = wad.maxBlockSize(@intCast(entries.items.len + 1));
+        if (block.items.len > max_block_size) {
+            return logger.fatal("File size exceeded archive format limit", .{});
         }
 
         checksum.update(mem.asBytes(&entry));

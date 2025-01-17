@@ -4,10 +4,15 @@ const xxhash = @import("../xxhash.zig");
 const ascii = std.ascii;
 const assert = std.debug.assert;
 
+// todo: move to toc
 pub const max_file_size = std.math.maxInt(u32);
 pub const max_archive_size = max_file_size * 2;
 
 pub const max_entries_len = @divTrunc(max_file_size - @sizeOf(toc.LatestHeader), @sizeOf(toc.LatestEntry));
+
+comptime {
+    assert(max_file_size > max_entries_len * @sizeOf(toc.LatestEntry) + @sizeOf(toc.LatestHeader));
+}
 
 pub const Header = extern struct {
     version: toc.Version,
@@ -73,10 +78,13 @@ pub const Entry = extern struct {
     }
 
     pub inline fn setPath(self: *Entry, path: []const u8) void {
-        if (std.debug.runtime_safety) for (path) |c| {
-            assert(ascii.isASCII(c) and (!ascii.isAlphabetic(c) or ascii.isLower(c)));
-        };
-        self.raw_entry.hash = xxhash.XxHash64.hash(0, path);
+        var hash = xxhash.XxHash64.init(0);
+        // todo: idk simd somehow mb possible, prob already in simd we need to check compiled code
+        for (path) |c| {
+            var byte = [_]u8{ascii.toLower(c)};
+            hash.update(&byte);
+        }
+        self.raw_entry.hash = hash.final();
     }
 
     pub inline fn setOffset(self: *Entry, offset: u32) void {

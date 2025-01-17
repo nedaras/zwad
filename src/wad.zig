@@ -13,13 +13,14 @@ pub const EntryType = @import("wad/toc.zig").EntryType;
 
 // todo: after implementing create add pipeToFileSystem function
 
-pub const max_file_size = std.math.maxInt(u32);
-pub const max_archive_size = max_file_size * 2;
+pub const max_file_size = output.max_file_size;
+pub const max_archive_size = output.max_archive_size;
 
-pub const max_entries_len = @divTrunc(max_file_size - @sizeOf(toc.LatestHeader), @sizeOf(toc.LatestEntry));
+pub const max_entries_len = output.max_entries_len;
 
-comptime {
-    assert(max_file_size > max_entries_len * @sizeOf(toc.LatestEntry) + @sizeOf(toc.LatestHeader));
+pub fn maxBlockSize(entries_len: u32) u64 {
+    assert(max_entries_len > entries_len);
+    return max_archive_size - @sizeOf(output.Header) - @sizeOf(output.Entry) * @as(u64, entries_len);
 }
 
 pub const Options = struct {

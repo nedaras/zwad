@@ -141,7 +141,7 @@ pub const zstd = struct {
 
             const Self = @This();
 
-            pub fn init(allocator: Allocator, wt: WriterType, options: CompressOptions) !Self {
+            pub fn init(allocator: Allocator, wt: WriterType, options: CompressOptions) zstandart.InitCompressStreamError!Self {
                 return .{
                     .source = wt,
                     .inner = try zstandart.initCompressStream(allocator),
@@ -154,8 +154,9 @@ pub const zstd = struct {
                 self.* = undefined;
             }
 
-            // tood: ensure that zstd reads whole input, write should compress all the input datacw
-            pub fn write(self: *Self, input: []const u8) !usize {
+            pub const Error = WriterType.Error || zstandart.CompressStreamError || zstandart.EndStreamError;
+
+            pub fn write(self: *Self, input: []const u8) Error!usize {
                 var in_buf = zstandart.InBuffer{
                     .src = input.ptr,
                     .size = @min(input.len, self.unread_bytes),
