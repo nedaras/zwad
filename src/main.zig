@@ -115,6 +115,7 @@ pub fn main() !void {
         .list => handle(list(args.options)),
         .extract => handle(extract(allocator, args.options, args.files)),
         .create => handle(create(allocator, args.options, args.files)),
+        // need verify
     };
 }
 

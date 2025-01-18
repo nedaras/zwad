@@ -20,6 +20,8 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         return logger.fatal("Cowardly refusing to create an empty archive", .{});
     }
 
+    // todo: we need to make blobs from files
+
     if (options.file == null) {
         const stdout = io.getStdOut();
         if (std.posix.isatty(stdout.handle)) {
@@ -35,6 +37,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     return writeArchive(allocator, file.writer(), options, files);
 }
 
+// todo: think if we should try to only writeout all the content if there was no errors
 pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, files: []const []const u8) HandleError!void {
     assert(files.len > 0);
 
@@ -153,9 +156,15 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
         entries.appendAssumeCapacity(entry);
 
         if (options.verbose) {
-            // todo: make it buffered
-            io.getStdOut().writer().writeAll(file_path) catch return;
-            io.getStdOut().writer().writeByte('\n') catch return;
+            const stdout = io.getStdOut();
+            var bw = io.BufferedWriter(fs.max_path_bytes, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+
+            for (file_path) |c| {
+                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
+            }
+            bw.writer().writeByte('\n') catch return;
+
+            bw.flush() catch return;
         }
     }
 
