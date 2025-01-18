@@ -25,8 +25,7 @@ pub fn extract(allocator: Allocator, options: Options, files: [][]const u8) Hand
     if (options.file == null) {
         const stdin = io.getStdIn();
         if (std.posix.isatty(stdin.handle)) {
-            logger.println("Refusing to read archive contents from terminal (missing -f option?)", .{});
-            return error.Fatal;
+            return logger.fatal("Refusing to read archive contents from terminal (missing -f option?)", .{});
         }
 
         // buffered reader would be nice for header, but for body, not rly

@@ -15,19 +15,32 @@ const Options = @import("cli.zig").Options;
 const HandleError = handled.HandleError;
 const assert = std.debug.assert;
 
-// we just need to hope that legue will accept our zstd_multi converted to zstd only and make an abi that would allow to add subchunks
-// we need to error messages
-pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
+pub fn create(allocator: Allocator, options: Options, files: []const []const u8) HandleError!void {
     if (files.len == 0) {
-        return;
+        return logger.fatal("Cowardly refusing to create an empty archive", .{});
     }
+
+    if (options.file == null) {
+        const stdout = io.getStdOut();
+        if (std.posix.isatty(stdout.handle)) {
+            return logger.fatal("Refusing to write archive contents from terminal (missing -f option?)", .{});
+        }
+
+        return writeArchive(allocator, stdout.writer(), options, files);
+    }
+
+    const file = fs.cwd().createFile(options.file.?, .{}) catch |err| return logger.errprint(err, "{s}: Cannot create", .{options.file.?});
+    defer file.close();
+
+    return writeArchive(allocator, file.writer(), options, files);
+}
+
+pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, files: []const []const u8) HandleError!void {
+    assert(files.len > 0);
 
     if (files.len > wad.max_entries_len) {
         return logger.fatal("Argument list too long", .{});
     }
-
-    const stdout = io.getStdOut();
-    const writer = stdout.writer();
 
     var block = std.ArrayList(u8).init(allocator);
     defer block.deinit();
@@ -77,9 +90,12 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
         var compressed_size: u32 = 0;
         while (true) {
-            const amt = try file.read(&read_buffer);
+            const amt = file.read(&read_buffer) catch |err| return logger.errprint(err, "{s}: Cannot read", .{file_path});
             if (amt == 0) break;
-            compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
+            compressed_size += @intCast(zstd_stream.write(read_buffer[0..amt]) catch |err| return switch (err) {
+                error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
+                error.OutOfMemory => |e| e,
+            });
         }
 
         // bench what is faster this, or wraped checksum writer
@@ -116,7 +132,10 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
                 var unread_bytes = decompressed_size;
                 while (unread_bytes != 0) {
                     const len = @min(read_buffer.len, unread_bytes);
-                    try file.reader().readNoEof(read_buffer[0..len]);
+                    file.reader().readNoEof(read_buffer[0..len]) catch |err| return switch (err) {
+                        error.EndOfStream => logger.fatal("{s}: Cannot read: EOF", .{file_path}),
+                        else => |e| logger.errprint(e, "{s}: Cannot read", .{file_path}),
+                    };
 
                     try block.appendSlice(read_buffer[0..len]);
                     unread_bytes -= @intCast(len);
@@ -132,13 +151,22 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 
         checksum.update(mem.asBytes(&entry));
         entries.appendAssumeCapacity(entry);
+
+        if (options.verbose) {
+            // todo: make it buffered
+            io.getStdOut().writer().writeAll(file_path) catch return;
+            io.getStdOut().writer().writeByte('\n') catch return;
+        }
     }
 
     if (entries.items.len == 0) {
         return error.Fatal;
     }
 
+    var fatal = false;
     if (entries.items.len != files.len) {
+        fatal = true;
+
         const offset_rollback: u32 = @intCast((files.len - entries.items.len) * @sizeOf(ouput.Entry));
         checksum.reset(0);
 
@@ -155,26 +183,30 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         }
     }.inner);
 
-    // todo: ignore broken pipe errors
     writer.writeStruct(ouput.Header.init(.{
         .checksum = checksum.final(),
         .entries_len = @intCast(entries.items.len),
     })) catch |err| return switch (err) {
         error.BrokenPipe => {},
+        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
         else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
     };
 
     writer.writeAll(mem.sliceAsBytes(entries.items)) catch |err| return switch (err) {
         error.BrokenPipe => {},
+        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
         else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
     };
 
     writer.writeAll(block.items) catch |err| return switch (err) {
         error.BrokenPipe => {},
+        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
         else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
     };
 
-    _ = options;
+    if (fatal) {
+        return error.Fatal;
+    }
 }
 
 fn ChecksumWriter(comptime WriterType: type) type {
