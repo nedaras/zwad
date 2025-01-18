@@ -46,6 +46,8 @@ pub const Error = error{
     FastOpenAlreadyInProgress,
     RenameAcrossMountPoints,
     CorruptedData,
+    LockViolation,
+    InvalidArgument, // rly stupid error
     Unexpected,
 };
 
@@ -90,6 +92,7 @@ pub fn stringify(err: Error) [:0]const u8 { // todo: we could  make these errors
         error.FastOpenAlreadyInProgress => "Operation already in progress",
         error.RenameAcrossMountPoints => "Invalid cross-device link",
         error.CorruptedData => "Integrity check failed",
+        error.LockViolation, error.InvalidArgument => unreachable,
         error.Unexpected => "Unknown error",
     };
 }

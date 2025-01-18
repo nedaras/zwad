@@ -141,7 +141,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
             if (entry.offset != entries.items[j][1].offset) break;
 
             const entry_path = entries.items[j][0];
-            const file = makeFile(fs.cwd(), entry_path) catch |err| return logger.errprint(err, "{s}: Cannot make", .{entry_path});
+            const file = createDirAndFile(fs.cwd(), entry_path) catch |err| return logger.errprint(err, "{s}: Cannot make", .{entry_path});
 
             try write_files.append(file);
         }
@@ -267,12 +267,12 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
             path = std.fmt.bufPrint(&path_buf, "{x:0>16}", .{entry.hash}) catch unreachable;
         }
 
-        const write_file = makeFile(out_dir, path) catch |err| blk: {
+        const write_file = createDirAndFile(out_dir, path) catch |err| blk: {
             bw.flush() catch return;
             logger.println("{s}: Cannot make: {s}", .{ path, errors.stringify(err) });
             if (err == error.BadPathName or err == error.NameTooLong or err == error.IsDir) {
                 path = std.fmt.bufPrint(&path_buf, "_inv/{x:0>16}", .{entry.hash}) catch unreachable;
-                break :blk makeFile(out_dir, path) catch |e| return logger.errprint(e, "{s}: Cannot make", .{path});
+                break :blk createDirAndFile(out_dir, path) catch |e| return logger.errprint(e, "{s}: Cannot make", .{path});
             }
             return handled.fatal(err);
         };
@@ -323,17 +323,17 @@ fn extractAll(allocator: Allocator, reader: anytype, options: Options) HandleErr
 
 const MakeFileError = fs.File.OpenError || fs.Dir.MakeError || fs.File.StatError;
 
-pub fn makeFile(dir: fs.Dir, sub_path: []const u8) MakeFileError!fs.File {
-    return dir.createFile(sub_path, .{ .read = true }) catch |err| switch (err) {
-        error.FileNotFound => {
-            if (fs.path.dirname(sub_path)) |sub_dir| {
-                try dir.makePath(sub_dir);
-                return dir.createFile(sub_path, .{ .read = true });
+fn createDirAndFile(dir: std.fs.Dir, file_name: []const u8) !std.fs.File {
+    const fs_file = dir.createFile(file_name, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            if (std.fs.path.dirname(file_name)) |dir_name| {
+                try dir.makePath(dir_name);
+                return dir.createFile(file_name, .{});
             }
-            return error.FileNotFound;
-        },
-        else => |e| return e,
+        }
+        return err;
     };
+    return fs_file;
 }
 
 pub fn copyFile(source_dir: fs.Dir, source_path: []const u8, dest_dir: fs.Dir, dest_path: []const u8, options: fs.Dir.CopyFileOptions) !void {

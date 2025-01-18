@@ -4,6 +4,7 @@ const compress = @import("compress.zig");
 const xxhash = @import("xxhash.zig");
 const logger = @import("logger.zig");
 const handled = @import("handled.zig");
+const errors = @import("errors.zig");
 const io = std.io;
 const fs = std.fs;
 const math = std.math;
@@ -15,7 +16,7 @@ const HandleError = handled.HandleError;
 const assert = std.debug.assert;
 
 // we just need to hope that legue will accept our zstd_multi converted to zstd only and make an abi that would allow to add subchunks
-// todo: handle BrokenPipe errors
+// we need to error messages
 pub fn create(allocator: Allocator, options: Options, files: []const []const u8) !void {
     if (files.len == 0) {
         return;
@@ -24,8 +25,6 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     if (files.len > wad.max_entries_len) {
         return logger.fatal("Argument list too long", .{});
     }
-
-    // add check if amount of files can even be created
 
     const stdout = io.getStdOut();
     const writer = stdout.writer();
@@ -50,19 +49,28 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
     defer zstd_stream.deinit();
 
     var checksum = xxhash.XxHash64.init(0);
-    for (files) |sub_path| {
-        const stat = fs.cwd().statFile(sub_path) catch |err| return logger.errprint(err, "{s}: Cannot stat", .{sub_path});
+    for (files) |file_path| {
+        const stat = fs.cwd().statFile(file_path) catch |err| {
+            logger.println("{s}: Cannot stat: {s}", .{ file_path, errors.stringify(err) });
+            continue;
+        };
+
+        // todo: make that given files could never be a directory
         if (stat.kind == .directory) {
-            return logger.errprint(error.IsDir, "{s}: Cannot open", .{sub_path});
+            logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(error.IsDir) });
+            continue;
+        }
+
+        if (stat.size > wad.max_file_size) {
+            return logger.errprint(error.FileTooBig, "{s}: Cannot open", .{file_path});
         }
 
         // todo: Check if maping is faster
-        const file = fs.cwd().openFile(sub_path, .{}) catch |err| return logger.errprint(err, "{s}: Cannot open", .{sub_path});
+        const file = fs.cwd().openFile(file_path, .{}) catch |err| {
+            logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(err) });
+            continue;
+        };
         defer file.close();
-
-        if (stat.size > wad.max_file_size) {
-            return logger.fatal("File size exceeded archive format limit", .{});
-        }
 
         const decompressed_size: u32 = @intCast(stat.size);
         zstd_stream.setFrameSize(decompressed_size);
@@ -73,12 +81,11 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             if (amt == 0) break;
             compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
         }
-        // add a check if block size did not exceeded it max size
 
         // bench what is faster this, or wraped checksum writer
         const entry_checksum = xxhash.XxHash3(64).hash(block.items[block.items.len - compressed_size ..]);
         var entry = ouput.Entry.init(.{
-            .path = sub_path,
+            .path = file_path, // path is always converted to lowercase by Entry
             .compressed_size = compressed_size,
             .decompressed_size = decompressed_size,
             .type = .zstd,
@@ -117,6 +124,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
             }
         }
 
+        // todo: when working with 32-bit we need to check these overflows too
         const max_block_size = wad.maxBlockSize(@intCast(entries.items.len + 1));
         if (block.items.len > max_block_size) {
             return logger.fatal("File size exceeded archive format limit", .{});
@@ -126,6 +134,20 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         entries.appendAssumeCapacity(entry);
     }
 
+    if (entries.items.len == 0) {
+        return error.Fatal;
+    }
+
+    if (entries.items.len != files.len) {
+        const offset_rollback: u32 = @intCast((files.len - entries.items.len) * @sizeOf(ouput.Entry));
+        checksum.reset(0);
+
+        for (entries.items) |*entry| {
+            entry.raw_entry.offset -= offset_rollback;
+            checksum.update(mem.asBytes(entry));
+        }
+    }
+
     // todo: check what is faster sorting paths before hand or sorting entries
     std.sort.block(ouput.Entry, entries.items, {}, struct {
         fn inner(_: void, a: ouput.Entry, b: ouput.Entry) bool {
@@ -133,23 +155,24 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         }
     }.inner);
 
-    if (entries.items.len != files.len) {
-        const sub: u32 = @intCast(files.len - entries.items.len);
-        checksum.reset(0);
-
-        for (entries.items) |*entry| {
-            entry.raw_entry.offset -= sub;
-            checksum.update(mem.asBytes(entry));
-        }
-    }
-
-    try writer.writeStruct(ouput.Header.init(.{
+    // todo: ignore broken pipe errors
+    writer.writeStruct(ouput.Header.init(.{
         .checksum = checksum.final(),
         .entries_len = @intCast(entries.items.len),
-    }));
+    })) catch |err| return switch (err) {
+        error.BrokenPipe => {},
+        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    };
 
-    try writer.writeAll(mem.sliceAsBytes(entries.items));
-    try writer.writeAll(block.items);
+    writer.writeAll(mem.sliceAsBytes(entries.items)) catch |err| return switch (err) {
+        error.BrokenPipe => {},
+        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    };
+
+    writer.writeAll(block.items) catch |err| return switch (err) {
+        error.BrokenPipe => {},
+        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    };
 
     _ = options;
 }
