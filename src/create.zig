@@ -7,6 +7,7 @@ const handled = @import("handled.zig");
 const errors = @import("errors.zig");
 const io = std.io;
 const fs = std.fs;
+const path = fs.path;
 const math = std.math;
 const mem = std.mem;
 const ouput = wad.output;
@@ -20,7 +21,8 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         return logger.fatal("Cowardly refusing to create an empty archive", .{});
     }
 
-    // todo: we need to make blobs from files
+    // todo: we need to make globs from files
+    // todo: handle _unk and _inv file paths
 
     if (options.file == null) {
         const stdout = io.getStdOut();
@@ -104,12 +106,18 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
         // bench what is faster this, or wraped checksum writer
         const entry_checksum = xxhash.XxHash3(64).hash(block.items[block.items.len - compressed_size ..]);
         var entry = ouput.Entry.init(.{
-            .path = file_path, // path is always converted to lowercase by Entry
+            .path = file_path, // path is always converted to lowercase by Entry, need to handle _inv and _unk
             .compressed_size = compressed_size,
             .decompressed_size = decompressed_size,
             .type = .zstd,
             .checksum = entry_checksum,
         });
+
+        const dirname = path.dirname(file_path);
+        if (dirname) |dir| if (mem.endsWith(u8, dir, "_unk") or mem.endsWith(u8, dir, "_inv")) {
+            const hash = std.fmt.parseInt(u64, path.basename(file_path), 16) catch unreachable; // todo: err handle
+            entry.raw_entry.hash = hash;
+        };
 
         if (offsets.get(entry_checksum)) |offset| {
             entry.setOffset(offset);
