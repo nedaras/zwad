@@ -99,6 +99,10 @@ pub const Entry = extern struct {
         self.raw_entry.byte = (self.raw_entry.byte & 0xF0) | @intFromEnum(entry_type);
     }
 
+    pub inline fn getType(self: *const Entry) toc.EntryType {
+        return std.meta.intToEnum(toc.EntryType, self.raw_entry.byte & 0x0F) catch unreachable;
+    }
+
     pub inline fn setDuplicate(self: *Entry) void {
         self.raw_entry.duplicate = true;
     }

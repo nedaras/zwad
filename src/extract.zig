@@ -162,7 +162,7 @@ fn extractSome(allocator: Allocator, reader: anytype, options: Options, files: [
                 .zstd, .zstd_multi => zstd_stream.reader().readNoEof(buf),
                 else => @panic("not implemented"),
             } catch |err| return switch (err) {
-                error.MalformedFrame, error.MalformedBlock => |e| logger.fatal("This archive seems to be corrupted error={s}", .{@errorName(e)}),
+                error.MalformedFrame, error.MalformedBlock => logger.fatal("This archive seems to be corrupted", .{}),
                 error.EndOfStream => logger.fatal("Unexpected EOF in archive", .{}),
                 error.Unexpected => logger.unexpected("Unknown error has occurred while extracting this archive", .{}),
                 else => |e| logger.errprint(e, "Unexpected error has occurred while extracting this archive", .{}),

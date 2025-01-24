@@ -18,7 +18,7 @@ pub fn println(comptime fmt: []const u8, args: anytype) void {
     defer std.debug.unlockStdErr();
 
     var bw = std.io.BufferedWriter(256, std.fs.File.Writer){
-        .unbuffered_writer = std.io.getStdOut().writer(),
+        .unbuffered_writer = std.io.getStdErr().writer(),
     };
 
     bw.writer().writeAll(prefix.?) catch return;
@@ -34,7 +34,7 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     defer std.debug.unlockStdErr();
 
     var bw = std.io.BufferedWriter(256, std.fs.File.Writer){
-        .unbuffered_writer = std.io.getStdOut().writer(),
+        .unbuffered_writer = std.io.getStdErr().writer(),
     };
 
     bw.writer().writeAll(prefix.?) catch return;
@@ -51,7 +51,7 @@ pub fn errprint(err: errors.Error, comptime fmt: []const u8, args: anytype) Hand
     defer std.debug.unlockStdErr();
 
     var bw = std.io.BufferedWriter(256, std.fs.File.Writer){
-        .unbuffered_writer = std.io.getStdOut().writer(),
+        .unbuffered_writer = std.io.getStdErr().writer(),
     };
 
     bw.writer().writeAll(prefix.?) catch return e;

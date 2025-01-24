@@ -21,8 +21,10 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
         return logger.fatal("Cowardly refusing to create an empty archive", .{});
     }
 
-    // todo: we need to make globs from files
-    // todo: handle _unk and _inv file paths
+    // idea is very simple we will not habdle blobs
+    // linux does handle them kinda
+    // if the file is a dir we will just get the whole dirs fils
+    // we can do smth like tars -T option so they could stream them in
 
     if (options.file == null) {
         const stdout = io.getStdOut();
@@ -53,147 +55,72 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     var entries = try std.ArrayList(ouput.Entry).initCapacity(allocator, files.len);
     defer entries.deinit();
 
-    var offsets = std.AutoHashMap(u64, u32).init(allocator);
+    var offsets = std.AutoHashMap(u64, *const ouput.Entry).init(allocator);
     defer offsets.deinit();
 
     try offsets.ensureTotalCapacity(@intCast(files.len));
 
-    const header_len = @sizeOf(ouput.Header) + @sizeOf(ouput.Entry) * files.len;
-
-    var read_buffer: [1 << 17]u8 = undefined;
     var window_buffer: [1 << 17]u8 = undefined;
 
     var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
-    var checksum = xxhash.XxHash64.init(0);
     for (files) |file_path| {
-        const stat = fs.cwd().statFile(file_path) catch |err| {
-            logger.println("{s}: Cannot stat: {s}", .{ file_path, errors.stringify(err) });
-            continue;
+        addFileToArchive(file_path, &zstd_stream, .{
+            .header = &entries,
+            .data = &block,
+            .entry_by_checksum = &offsets,
+        }) catch |err| switch (err) {
+            error.IsDir => {
+                const dir = fs.cwd().openDir(file_path, .{ .iterate = true }) catch unreachable;
+
+                var walker = dir.walk(allocator) catch unreachable;
+                defer walker.deinit();
+
+                while (walker.next() catch unreachable) |next| {
+                    if (next.kind == .directory) continue;
+
+                    addFileToArchive(next.path, &zstd_stream, .{
+                        .dir = dir,
+                        .prefix = file_path,
+                        .header = &entries,
+                        .data = &block,
+                        .entry_by_checksum = &offsets,
+                    }) catch unreachable;
+                }
+
+                continue;
+            },
+            else => unreachable,
         };
 
-        // todo: make that given files could never be a directory
-        if (stat.kind == .directory) {
-            logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(error.IsDir) });
-            continue;
-        }
-
-        if (stat.size > wad.max_file_size) {
-            return logger.errprint(error.FileTooBig, "{s}: Cannot open", .{file_path});
-        }
-
-        // todo: Check if maping is faster
-        const file = fs.cwd().openFile(file_path, .{}) catch |err| {
-            logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(err) });
-            continue;
-        };
-        defer file.close();
-
-        const decompressed_size: u32 = @intCast(stat.size);
-        zstd_stream.setFrameSize(decompressed_size);
-
-        var compressed_size: u32 = 0;
-        while (true) {
-            const amt = file.read(&read_buffer) catch |err| return logger.errprint(err, "{s}: Cannot read", .{file_path});
-            if (amt == 0) break;
-            compressed_size += @intCast(zstd_stream.write(read_buffer[0..amt]) catch |err| return switch (err) {
-                error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
-                error.OutOfMemory => |e| e,
-            });
-        }
-
-        // bench what is faster this, or wraped checksum writer
-        const entry_checksum = xxhash.XxHash3(64).hash(block.items[block.items.len - compressed_size ..]);
-        var entry = ouput.Entry.init(.{
-            .path = file_path, // path is always converted to lowercase by Entry, need to handle _inv and _unk
-            .compressed_size = compressed_size,
-            .decompressed_size = decompressed_size,
-            .type = .zstd,
-            .checksum = entry_checksum,
-        });
-
-        const dirname = path.dirname(file_path);
-        if (dirname) |dir| blk: {
-            if (mem.endsWith(u8, dir, "_unk") or mem.endsWith(u8, dir, "_inv")) {
-                const hash = std.fmt.parseInt(u64, path.basename(file_path), 16) catch break :blk;
-                entry.raw_entry.hash = hash;
-            }
-        }
-
-        if (offsets.get(entry_checksum)) |offset| {
-            entry.setOffset(offset);
-            block.items.len -= compressed_size;
-        } else {
-            const offset: u32 = @intCast(header_len + block.items.len - compressed_size);
-
-            offsets.putAssumeCapacity(entry_checksum, offset);
-            entry.setOffset(offset);
-
-            if (compressed_size >= decompressed_size) blk: {
-                if (decompressed_size == 0) {
-                    entry.setType(.raw);
-                    break :blk;
-                }
-                file.seekTo(0) catch break :blk;
-
-                entry.setType(.raw);
-                entry.setCompressedSize(decompressed_size);
-
-                block.items.len -= compressed_size;
-
-                var unread_bytes = decompressed_size;
-                while (unread_bytes != 0) {
-                    const len = @min(read_buffer.len, unread_bytes);
-                    file.reader().readNoEof(read_buffer[0..len]) catch |err| return switch (err) {
-                        error.EndOfStream => logger.fatal("{s}: Cannot read: EOF", .{file_path}),
-                        else => |e| logger.errprint(e, "{s}: Cannot read", .{file_path}),
-                    };
-
-                    try block.appendSlice(read_buffer[0..len]);
-                    unread_bytes -= @intCast(len);
-                }
-            }
-        }
-
-        // todo: when working with 32-bit we need to check these overflows too
-        const max_block_size = wad.maxBlockSize(@intCast(entries.items.len + 1));
-        if (block.items.len > max_block_size) {
-            return logger.fatal("File size exceeded archive format limit", .{});
-        }
-
-        checksum.update(mem.asBytes(&entry));
-        entries.appendAssumeCapacity(entry);
-
-        if (options.verbose) {
-            const stdout = io.getStdOut();
-            var bw = io.BufferedWriter(fs.max_path_bytes, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
-
-            for (file_path) |c| {
-                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
-            }
-            bw.writer().writeByte('\n') catch return;
-
-            bw.flush() catch return;
-        }
+        _ = options;
     }
 
     if (entries.items.len == 0) {
         return error.Fatal;
     }
 
-    var fatal = false;
-    if (entries.items.len != files.len) {
-        fatal = true;
-
-        const offset_rollback: u32 = @intCast((files.len - entries.items.len) * @sizeOf(ouput.Entry));
-        checksum.reset(0);
-
-        for (entries.items) |*entry| {
-            entry.raw_entry.offset -= offset_rollback;
-            checksum.update(mem.asBytes(entry));
-        }
+    var checksum = xxhash.XxHash64.init(0);
+    for (entries.items) |*entry| {
+        // todo: check for overflow
+        const shift: u32 = @intCast(@sizeOf(ouput.Header) + entries.items.len * @sizeOf(ouput.Entry));
+        entry.raw_entry.offset += shift;
+        checksum.update(mem.asBytes(entry));
     }
+
+    //var fatal = false;
+    //if (entries.items.len != files.len) {
+    //fatal = true;
+
+    //const offset_rollback: u32 = @intCast((files.len - entries.items.len) * @sizeOf(ouput.Entry));
+    //checksum.reset(0);
+
+    //for (entries.items) |*entry| {
+    //entry.raw_entry.offset -= offset_rollback;
+    //checksum.update(mem.asBytes(entry));
+    //}
+    //}
 
     // todo: check what is faster sorting paths before hand or sorting entries
     std.sort.block(ouput.Entry, entries.items, {}, struct {
@@ -223,8 +150,129 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
         else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
     };
 
-    if (fatal) {
-        return error.Fatal;
+    //if (fatal) {
+    //return error.Fatal;
+    //}
+}
+
+const AddFileOptions = struct {
+    dir: fs.Dir = fs.cwd(),
+    prefix: []const u8 = "",
+    header: *std.ArrayList(ouput.Entry),
+    data: *std.ArrayList(u8),
+    entry_by_checksum: *std.AutoHashMap(u64, *const ouput.Entry),
+};
+
+fn addFileToArchive(sub_path: []const u8, stream: anytype, options: AddFileOptions) !void {
+    const file_stat = try options.dir.statFile(sub_path);
+    if (file_stat.kind == .directory) {
+        return error.IsDir;
+    }
+
+    if (file_stat.size > wad.max_file_size) {
+        return error.FileTooBig;
+    }
+
+    const file = try options.dir.openFile(sub_path, .{});
+    defer file.close();
+
+    const decompressed_size: u32 = @intCast(file_stat.size);
+    stream.setFrameSize(decompressed_size);
+
+    var buffer: [1 << 17]u8 = undefined;
+
+    var compressed_size: u32 = 0;
+    while (true) {
+        const amt = try file.read(&buffer);
+        if (amt == 0) break;
+        compressed_size += @intCast(try stream.write(buffer[0..amt]));
+    }
+
+    const entry_checksum = xxhash.XxHash3(64).hash(options.data.items[options.data.items.len - compressed_size ..]);
+    var entry = ouput.Entry.init(.{
+        //.path = sub_path, // path is always converted to lowercase by Entry, we're not handling prefix
+        .compressed_size = compressed_size,
+        .decompressed_size = decompressed_size,
+        .type = .zstd,
+        .checksum = entry_checksum,
+    });
+
+    {
+        var path_hash = xxhash.XxHash64.init(0);
+        if (options.prefix.len > 0) {
+            for (options.prefix) |c| {
+                var char = [_]u8{std.ascii.toLower(c)};
+                path_hash.update(&char);
+            }
+            if (options.prefix[options.prefix.len - 1] != '/') {
+                path_hash.update("/");
+            }
+        }
+
+        for (sub_path) |c| {
+            var char = [_]u8{std.ascii.toLower(c)};
+            path_hash.update(&char);
+        }
+
+        entry.raw_entry.hash = path_hash.final();
+    }
+
+    const dirname = path.dirname(sub_path);
+    if (dirname) |dir| blk: {
+        if (mem.endsWith(u8, dir, "_unk") or mem.endsWith(u8, dir, "_inv")) {
+            const hash = std.fmt.parseInt(u64, path.basename(sub_path), 16) catch break :blk;
+            entry.raw_entry.hash = hash;
+        }
+    }
+
+    var flag = false;
+    if (options.entry_by_checksum.get(entry_checksum)) |e| {
+        entry.setType(e.getType());
+        entry.setCompressedSize(e.raw_entry.compressed_size);
+        entry.setOffset(e.raw_entry.offset);
+
+        options.data.items.len -= compressed_size;
+    } else {
+        // todo: check for overflow
+        flag = true;
+        const offset: u32 = @intCast(options.data.items.len - compressed_size);
+        entry.setOffset(offset);
+
+        if (compressed_size >= decompressed_size) blk: {
+            if (decompressed_size == 0) {
+                entry.setType(.raw);
+                break :blk;
+            }
+            file.seekTo(0) catch break :blk;
+
+            entry.setType(.raw);
+            entry.setCompressedSize(decompressed_size);
+
+            options.data.items.len -= compressed_size;
+
+            var unread_bytes = decompressed_size;
+            while (unread_bytes != 0) {
+                const slice = buffer[0..@min(buffer.len, unread_bytes)];
+
+                try file.reader().readNoEof(slice);
+                try options.data.appendSlice(slice);
+
+                unread_bytes -= @intCast(slice.len);
+            }
+        }
+    }
+
+    // todo: when working with 32-bit we need to check these overflows too
+    const max_block_size = wad.maxBlockSize(@intCast(options.header.items.len + 1));
+    if (options.data.items.len > max_block_size) {
+        return error.ArchiveTooBig;
+    }
+
+    const item_ptr = try options.header.addOne();
+    item_ptr.* = entry;
+
+    if (flag) {
+        try options.entry_by_checksum.put(entry_checksum, item_ptr);
     }
 }
 
