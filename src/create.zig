@@ -66,6 +66,9 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     defer zstd_stream.deinit();
 
     for (files) |file_path| {
+        const stdout = io.getStdOut();
+        var bw = io.BufferedWriter(fs.max_path_bytes, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+
         addFileToArchive(file_path, &zstd_stream, .{
             .header = &entries,
             .data = &block,
@@ -87,6 +90,25 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
                         .data = &block,
                         .entry_by_checksum = &offsets,
                     }) catch unreachable;
+
+                    if (options.verbose) {
+                        if (file_path.len > 0) {
+                            for (file_path) |c| {
+                                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
+                            }
+                            // todo: handle so it would not be like path///////////////////
+                            if (file_path[file_path.len - 1] != '/') {
+                                bw.writer().writeByte('/') catch return;
+                            }
+                        }
+
+                        for (next.path) |c| {
+                            bw.writer().writeByte(std.ascii.toLower(c)) catch return;
+                        }
+
+                        bw.writer().writeByte('\n') catch return;
+                        bw.flush() catch return;
+                    }
                 }
 
                 continue;
@@ -94,7 +116,14 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
             else => unreachable,
         };
 
-        _ = options;
+        if (options.verbose) {
+            for (file_path) |c| {
+                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
+            }
+
+            bw.writer().writeByte('\n') catch return;
+            bw.flush() catch return;
+        }
     }
 
     if (entries.items.len == 0) {
