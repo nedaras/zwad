@@ -114,10 +114,12 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
         });
 
         const dirname = path.dirname(file_path);
-        if (dirname) |dir| if (mem.endsWith(u8, dir, "_unk") or mem.endsWith(u8, dir, "_inv")) {
-            const hash = std.fmt.parseInt(u64, path.basename(file_path), 16) catch unreachable; // todo: err handle
-            entry.raw_entry.hash = hash;
-        };
+        if (dirname) |dir| blk: {
+            if (mem.endsWith(u8, dir, "_unk") or mem.endsWith(u8, dir, "_inv")) {
+                const hash = std.fmt.parseInt(u64, path.basename(file_path), 16) catch break :blk;
+                entry.raw_entry.hash = hash;
+            }
+        }
 
         if (offsets.get(entry_checksum)) |offset| {
             entry.setOffset(offset);
