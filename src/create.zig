@@ -60,6 +60,7 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     defer entry_by_checksum.deinit();
 
     var window_buffer: [1 << 17]u8 = undefined;
+    var read_buffer: [1 << 17]u8 = undefined;
 
     var zstd_stream = try compress.zstd.compressor(allocator, data.writer(), .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
@@ -67,26 +68,69 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     var walker = walkFiles(allocator, files);
     defer walker.deinit();
 
-    while (try walker.next()) |file_path| {
-        // todo: check if path hash already is in the archive
+    // for getting the failure flag we could just throw handled errors inside walker
+    outer: while (try walker.next()) |file_path| {
+        var hash = xxhash.XxHash64.init(0);
+        hash.update(file_path.first);
+        hash.update(file_path.seperator());
+        hash.update(file_path.second);
+
+        const path_hash = hash.final();
+        for (entries.items) |entry| {
+            // means this file is already added
+            if (entry.raw_entry.hash == path_hash) {
+                continue :outer;
+            }
+        }
+
+        const errprint = struct {
+            fn inner(wp: Walker.Path, comptime description: []const u8, err: errors.Error) void {
+                logger.println("{s}{s}{s}: " ++ description ++ ": {s}", .{ wp.first, wp.seperator(), wp.second, errors.stringify(err) });
+            }
+        }.inner;
 
         const file_stat = file_path.stat() catch |err| {
-            logger.println("{s}{s}{s}: Cannot stat: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(err) });
+            errprint(file_path, "Cannot stat", err);
             continue;
         };
 
         if (file_stat.size > wad.max_file_size) {
-            logger.println("{s}{s}{s}: Cannot open: " ++ errors.stringify(error.FileTooBig), .{ file_path.first, file_path.seperator(), file_path.second });
+            errprint(file_path, "Cannot open", error.FileTooBig);
             continue;
         }
 
         const file = file_path.open(.{}) catch |err| {
-            logger.println("{s}{s}{s}: Cannot open: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(err) });
+            errprint(file_path, "Cannot open", err);
             continue;
         };
         defer file.close();
 
-        std.debug.print("opened: {s}{s}{s}\n", .{ file_path.first, file_path.seperator(), file_path.second });
+        const decompressed_size: u32 = @intCast(file_stat.size);
+        zstd_stream.setFrameSize(decompressed_size);
+
+        var compressed_size: u32 = 0;
+        while (true) {
+            const amt = file.read(&read_buffer) catch |err| {
+                errprint(file_path, "Cannot read", err);
+                continue :outer;
+            };
+            if (amt == 0) break;
+            compressed_size += @intCast(try zstd_stream.write(read_buffer[0..amt]));
+        }
+
+        //var entry = ouput.Entry.init(.{
+        //.compressed_size = compressed_size,
+        //.decompressed_size = decompressed_size,
+        //.type = .zstd,
+        //});
+
+        const dir_name = path.dirname(file_path.second) orelse path.dirname(file_path.first) orelse file_path.first;
+        if (std.mem.endsWith(u8, dir_name, "_unk") or std.mem.endsWith(u8, dir_name, "_inv")) {
+            const basename = path.basename(file_path.base_path);
+            std.debug.print("{s}\n", .{basename});
+        }
+
+        //std.debug.print("{s}{s}{s}: {d}\n", .{ file_path.first, file_path.seperator(), file_path.second, compressed_size });
     }
 
     _ = writer;
@@ -269,7 +313,7 @@ const Walker = struct {
         first: []const u8,
         second: []const u8,
 
-        basename: []const u8,
+        base_path: []const u8,
 
         const File = fs.File;
         const Dir = fs.Dir;
@@ -279,14 +323,18 @@ const Walker = struct {
                 return st;
             }
 
-            return self.dir.statFile(self.basename);
+            return self.dir.statFile(self.base_path);
         }
 
         fn open(self: Path, flags: File.OpenFlags) File.OpenError!File {
-            return self.dir.openFile(self.basename, flags);
+            return self.dir.openFile(self.base_path, flags);
         }
 
         fn seperator(self: Path) []const u8 {
+            if (self.second.len == 0) {
+                return "";
+            }
+
             if (self.first.len > 0) {
                 const last_c = self.first[self.first.len - 1];
                 if (last_c == path.sep_posix or last_c == path.sep_posix) {
@@ -331,7 +379,7 @@ const Walker = struct {
                     .st = file_stat,
                     .first = file_path,
                     .second = "",
-                    .basename = file_path,
+                    .base_path = file_path,
                 };
             }
 
@@ -381,7 +429,7 @@ const Walker = struct {
                 .dir = entry.dir,
                 .first = self.files[self.idx - 1],
                 .second = entry.path,
-                .basename = entry.basename,
+                .base_path = entry.basename,
             };
         }
     }

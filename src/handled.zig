@@ -93,32 +93,6 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
     return Mapping.init(file, file_map);
 }
 
-pub const Walker = struct {
-    inner: Dir.Walker,
-
-    pub fn next(self: *Walker) HandleError!?Dir.Walker.Entry {
-        return self.inner.next() catch |err| switch (err) {
-            error.OutOfMemory => |e| return e,
-            else => |e| {
-                const dir_name = self.inner.name_buffer.items;
-                return logger.errprint(e, "{s}: Cannot open", .{dir_name});
-            },
-        };
-    }
-
-    pub fn deinit(self: *Walker) void {
-        self.inner.deinit();
-    }
-};
-
-pub const WalkOptions = struct {
-    root_dir: Dir = fs.cwd(),
-};
-
-pub fn walk(allocator: std.mem.Allocator, options: WalkOptions) error{OutOfMemory}!Walker {
-    return .{ .inner = try options.root_dir.walk(allocator) };
-}
-
 pub const StatFileOptions = struct {
     root_dir: Dir = fs.cwd(),
 };
