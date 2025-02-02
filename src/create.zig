@@ -68,7 +68,25 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     defer walker.deinit();
 
     while (try walker.next()) |file_path| {
-        std.debug.print("{s}{s}{s}\n", .{ file_path.first, file_path.seperator(), file_path.second });
+        // todo: check if path hash already is in the archive
+
+        const file_stat = file_path.stat() catch |err| {
+            logger.println("{s}{s}{s}: Cannot stat: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(err) });
+            continue;
+        };
+
+        if (file_stat.size > wad.max_file_size) {
+            logger.println("{s}{s}{s}: Cannot open: " ++ errors.stringify(error.FileTooBig), .{ file_path.first, file_path.seperator(), file_path.second });
+            continue;
+        }
+
+        const file = file_path.open(.{}) catch |err| {
+            logger.println("{s}{s}{s}: Cannot open: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(err) });
+            continue;
+        };
+        defer file.close();
+
+        std.debug.print("opened: {s}{s}{s}\n", .{ file_path.first, file_path.seperator(), file_path.second });
     }
 
     _ = writer;
@@ -242,6 +260,43 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
 }
 
 const Walker = struct {
+    const Path = struct {
+        dir: Dir,
+        st: ?File.Stat = null,
+
+        // add like dir inside and
+        // len for psudo dir
+        first: []const u8,
+        second: []const u8,
+
+        basename: []const u8,
+
+        const File = fs.File;
+        const Dir = fs.Dir;
+
+        fn stat(self: Path) Dir.StatFileError!File.Stat {
+            if (self.st) |st| {
+                return st;
+            }
+
+            return self.dir.statFile(self.basename);
+        }
+
+        fn open(self: Path, flags: File.OpenFlags) File.OpenError!File {
+            return self.dir.openFile(self.basename, flags);
+        }
+
+        fn seperator(self: Path) []const u8 {
+            if (self.first.len > 0) {
+                const last_c = self.first[self.first.len - 1];
+                if (last_c == path.sep_posix or last_c == path.sep_posix) {
+                    return "";
+                }
+            }
+            return path.sep_str;
+        }
+    };
+
     inner: ?fs.Dir.Walker = null,
 
     files: []const []const u8,
@@ -258,21 +313,6 @@ const Walker = struct {
         self.* = undefined;
     }
 
-    const Path = struct {
-        first: []const u8,
-        second: []const u8,
-
-        fn seperator(self: Path) []const u8 {
-            if (self.first.len > 0) {
-                const last_c = self.first[self.first.len - 1];
-                if (last_c == path.sep_posix or last_c == path.sep_posix) {
-                    return "";
-                }
-            }
-            return path.sep_str;
-        }
-    };
-
     fn next(self: *Walker) Allocator.Error!?Path {
         if (self.inner != null) {
             if (try innerNext(self)) |n| {
@@ -287,8 +327,11 @@ const Walker = struct {
                 const file_stat = handled.statFile(file_path, .{}) catch continue;
 
                 if (file_stat.kind != .directory) return .{
+                    .dir = fs.cwd(),
+                    .st = file_stat,
                     .first = file_path,
                     .second = "",
+                    .basename = file_path,
                 };
             }
 
@@ -311,16 +354,22 @@ const Walker = struct {
             const mb = self.inner.?.next() catch |err| switch (err) {
                 error.OutOfMemory => |e| return e,
                 else => |e| {
-                    const file_path = Path{
-                        .first = self.files[self.idx - 1],
-                        .second = self.inner.?.name_buffer.items,
-                    };
+                    var seperator: []const u8 = path.sep_str;
+                    const file_path = self.files[self.idx - 1];
 
-                    logger.println("{s}{s}{s}: Cannot open: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(e) });
+                    if (file_path.len > 0) {
+                        const last_c = file_path[file_path.len - 1];
+                        if (last_c == path.sep_posix or last_c == path.sep_posix) {
+                            seperator = "";
+                        }
+                    }
+
+                    logger.println("{s}{s}{s}: Cannot open: {s}", .{ file_path, seperator, self.inner.?.name_buffer.items, errors.stringify(e) });
                     continue;
                 },
             };
             const entry = mb orelse {
+                assert(self.inner.?.stack.items.len == 0);
                 self.inner.?.deinit();
                 self.inner = null;
 
@@ -329,8 +378,10 @@ const Walker = struct {
             if (entry.kind == .directory) continue;
 
             return .{
+                .dir = entry.dir,
                 .first = self.files[self.idx - 1],
                 .second = entry.path,
+                .basename = entry.basename,
             };
         }
     }
