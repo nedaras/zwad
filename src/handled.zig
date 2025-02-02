@@ -78,11 +78,7 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
         .allow_ctty = flags.allow_ctty,
     };
 
-    const file = dir.openFile(sub_path, open_flags) catch |err| {
-        logger.println("{s}: Cannot open: {s}", .{ sub_path, errors.stringify(err) });
-        return if (err == error.Unexpected) error.Unexpected else error.Fatal;
-    };
-
+    const file = dir.openFile(sub_path, open_flags) catch |err| return logger.errprint(err, "{s}: Cannot open", .{sub_path});
     const file_map = mapping.mapFile(file, .{ .mode = flags.mode, .size = flags.size }) catch |err| {
         const msg = switch (err) {
             error.InvalidSize => "File is empty",
@@ -95,4 +91,38 @@ pub fn map(dir: Dir, sub_path: []const u8, flags: MapFlags) HandleError!Mapping 
     };
 
     return Mapping.init(file, file_map);
+}
+
+pub const Walker = struct {
+    inner: Dir.Walker,
+
+    pub fn next(self: *Walker) HandleError!?Dir.Walker.Entry {
+        return self.inner.next() catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => |e| {
+                const dir_name = self.inner.name_buffer.items;
+                return logger.errprint(e, "{s}: Cannot open", .{dir_name});
+            },
+        };
+    }
+
+    pub fn deinit(self: *Walker) void {
+        self.inner.deinit();
+    }
+};
+
+pub const WalkOptions = struct {
+    root_dir: Dir = fs.cwd(),
+};
+
+pub fn walk(allocator: std.mem.Allocator, options: WalkOptions) error{OutOfMemory}!Walker {
+    return .{ .inner = try options.root_dir.walk(allocator) };
+}
+
+pub const StatFileOptions = struct {
+    root_dir: Dir = fs.cwd(),
+};
+
+pub fn statFile(sub_path: []const u8, options: StatFileOptions) HandleError!fs.File.Stat {
+    return options.root_dir.statFile(sub_path) catch |err| return logger.errprint(err, "{s}: Cannot stat", .{sub_path});
 }

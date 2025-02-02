@@ -42,6 +42,7 @@ pub fn create(allocator: Allocator, options: Options, files: []const []const u8)
 }
 
 // todo: think if we should try to only writeout all the content if there was no errors
+// todo: add an option fot writing out hashes or writing them inside the archive at like 0x000...
 pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, files: []const []const u8) HandleError!void {
     assert(files.len > 0);
 
@@ -49,94 +50,150 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
         return logger.fatal("Argument list too long", .{});
     }
 
-    var block = std.ArrayList(u8).init(allocator);
-    defer block.deinit();
+    var data = std.ArrayList(u8).init(allocator);
+    defer data.deinit();
 
     var entries = try std.ArrayList(ouput.Entry).initCapacity(allocator, files.len);
     defer entries.deinit();
 
-    var offsets = std.AutoHashMap(u64, *const ouput.Entry).init(allocator);
-    defer offsets.deinit();
-
-    try offsets.ensureTotalCapacity(@intCast(files.len));
+    var entry_by_checksum = std.AutoHashMap(u64, *const ouput.Entry).init(allocator);
+    defer entry_by_checksum.deinit();
 
     var window_buffer: [1 << 17]u8 = undefined;
 
-    var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
+    var zstd_stream = try compress.zstd.compressor(allocator, data.writer(), .{ .window_buffer = &window_buffer });
     defer zstd_stream.deinit();
 
-    for (files) |file_path| {
-        const stdout = io.getStdOut();
-        var bw = io.BufferedWriter(fs.max_path_bytes, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+    var walker = walkFiles(allocator, files);
+    defer walker.deinit();
 
-        addFileToArchive(file_path, &zstd_stream, .{
-            .header = &entries,
-            .data = &block,
-            .entry_by_checksum = &offsets,
-        }) catch |err| switch (err) {
-            error.IsDir => {
-                const dir = fs.cwd().openDir(file_path, .{ .iterate = true }) catch unreachable;
-
-                var walker = dir.walk(allocator) catch unreachable;
-                defer walker.deinit();
-
-                while (walker.next() catch unreachable) |next| {
-                    if (next.kind == .directory) continue;
-
-                    addFileToArchive(next.path, &zstd_stream, .{
-                        .dir = dir,
-                        .prefix = file_path,
-                        .header = &entries,
-                        .data = &block,
-                        .entry_by_checksum = &offsets,
-                    }) catch unreachable;
-
-                    if (options.verbose) {
-                        if (file_path.len > 0) {
-                            for (file_path) |c| {
-                                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
-                            }
-                            // todo: handle so it would not be like path///////////////////
-                            if (file_path[file_path.len - 1] != '/') {
-                                bw.writer().writeByte('/') catch return;
-                            }
-                        }
-
-                        for (next.path) |c| {
-                            bw.writer().writeByte(std.ascii.toLower(c)) catch return;
-                        }
-
-                        bw.writer().writeByte('\n') catch return;
-                        bw.flush() catch return;
-                    }
-                }
-
-                continue;
-            },
-            else => unreachable,
-        };
-
-        if (options.verbose) {
-            for (file_path) |c| {
-                bw.writer().writeByte(std.ascii.toLower(c)) catch return;
-            }
-
-            bw.writer().writeByte('\n') catch return;
-            bw.flush() catch return;
-        }
+    while (try walker.next()) |file_path| {
+        std.debug.print("{s}{s}{s}\n", .{ file_path.first, file_path.seperator(), file_path.second });
     }
 
-    if (entries.items.len == 0) {
-        return error.Fatal;
-    }
+    _ = writer;
+    _ = options;
 
-    var checksum = xxhash.XxHash64.init(0);
-    for (entries.items) |*entry| {
-        // todo: check for overflow
-        const shift: u32 = @intCast(@sizeOf(ouput.Header) + entries.items.len * @sizeOf(ouput.Entry));
-        entry.raw_entry.offset += shift;
-        checksum.update(mem.asBytes(entry));
-    }
+    //var flag = false;
+    //for (files) |file_path| {
+    //const file_stat = handled.statFile(file_path, .{}) catch {
+    //flag = true;
+    //continue;
+    //};
+
+    //if (file_stat.kind == .directory) {
+    //const walk_dir = fs.cwd().openDir(file_path, .{ .iterate = true }) catch |err| {
+    //logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(err) });
+    //flag = true;
+    //continue;
+    //};
+
+    //var walker = try handled.walk(allocator, .{ .root_dir = walk_dir });
+    //defer walker.deinit();
+
+    //while (true) {
+    //const mb = walker.next() catch {
+    //flag = true;
+    //continue;
+    //};
+    //const entry = mb orelse break;
+    //if (entry.kind == .directory) continue;
+
+    //if (file_stat.size > wad.max_file_size) {
+    //logger.println("{s}: Cannot open: " ++ errors.stringify(error.FileTooBig), .{file_path});
+    //flag = true;
+    //continue;
+    //}
+
+    // file here
+
+    //std.debug.print("{s}\n", .{entry.path});
+    //}
+    //continue;
+    //}
+
+    //if (file_stat.size > wad.max_file_size) {
+    //logger.println("{s}: Cannot open: " ++ errors.stringify(error.FileTooBig), .{file_path});
+    //flag = true;
+    //continue;
+    //}
+
+    // file here
+
+    //_ = options;
+    //_ = writer;
+    //}
+
+    //try offsets.ensureTotalCapacity(@intCast(files.len));
+
+    //var window_buffer: [1 << 17]u8 = undefined;
+
+    //var zstd_stream = try compress.zstd.compressor(allocator, block.writer(), .{ .window_buffer = &window_buffer });
+    //defer zstd_stream.deinit();
+
+    //for (files) |file_path| {
+    //const stdout = io.getStdOut();
+    //var bw = io.BufferedWriter(fs.max_path_bytes, fs.File.Writer){ .unbuffered_writer = stdout.writer() };
+
+    //addFileToArchive(file_path, &zstd_stream, .{
+    //.header = &entries,
+    //.data = &block,
+    //.entry_by_checksum = &offsets,
+    //}) catch |err| switch (err) {
+    //error.IsDir => {
+    //const dir = fs.cwd().openDir(file_path, .{ .iterate = true }) catch unreachable;
+
+    // todo: no err handling mate
+    //var walker = dir.walk(allocator) catch unreachable;
+    //defer walker.deinit();
+
+    //while (walker.next() catch unreachable) |next| {
+    //if (next.kind == .directory) continue;
+
+    //try addFileToArchive(next.path, &zstd_stream, .{
+    //.dir = dir,
+    //.prefix = file_path,
+    //.header = &entries,
+    //.data = &block,
+    //.entry_by_checksum = &offsets,
+    //});
+
+    //if (options.verbose) {
+    //if (file_path.len > 0) {
+    //bw.writer().writeAll(file_path) catch return;
+    //if (file_path[file_path.len - 1] != '/') {
+    //bw.writer().writeByte('/') catch return;
+    //}
+    //}
+
+    //bw.writer().writeAll(next.path) catch return;
+    //bw.writer().writeByte('\n') catch return;
+
+    //bw.flush() catch return;
+    //}
+    //}
+    //},
+    //};
+
+    //if (options.verbose) {
+    //bw.writer().writeAll(file_path) catch return;
+    //bw.writer().writeByte('\n') catch return;
+
+    //bw.flush() catch return;
+    //}
+    //}
+
+    //if (entries.items.len == 0) {
+    //return error.Fatal;
+    //}
+
+    //var checksum = xxhash.XxHash64.init(0);
+    //for (entries.items) |*entry| {
+    // todo: check for overflow
+    //const shift: u32 = @intCast(@sizeOf(ouput.Header) + entries.items.len * @sizeOf(ouput.Entry));
+    //entry.raw_entry.offset += shift;
+    //checksum.update(mem.asBytes(entry));
+    //}
 
     //var fatal = false;
     //if (entries.items.len != files.len) {
@@ -152,36 +209,138 @@ pub fn writeArchive(allocator: Allocator, writer: anytype, options: Options, fil
     //}
 
     // todo: check what is faster sorting paths before hand or sorting entries
-    std.sort.block(ouput.Entry, entries.items, {}, struct {
-        fn inner(_: void, a: ouput.Entry, b: ouput.Entry) bool {
-            return a.raw_entry.hash < b.raw_entry.hash;
-        }
-    }.inner);
+    //std.sort.block(ouput.Entry, entries.items, {}, struct {
+    //fn inner(_: void, a: ouput.Entry, b: ouput.Entry) bool {
+    //return a.raw_entry.hash < b.raw_entry.hash;
+    //}
+    //}.inner);
 
-    writer.writeStruct(ouput.Header.init(.{
-        .checksum = checksum.final(),
-        .entries_len = @intCast(entries.items.len),
-    })) catch |err| return switch (err) {
-        error.BrokenPipe => {},
-        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
-        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
-    };
+    //writer.writeStruct(ouput.Header.init(.{
+    //.checksum = checksum.final(),
+    //.entries_len = @intCast(entries.items.len),
+    //})) catch |err| return switch (err) {
+    //error.BrokenPipe => {},
+    //error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
+    //else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    //};
 
-    writer.writeAll(mem.sliceAsBytes(entries.items)) catch |err| return switch (err) {
-        error.BrokenPipe => {},
-        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
-        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
-    };
+    //writer.writeAll(mem.sliceAsBytes(entries.items)) catch |err| return switch (err) {
+    //error.BrokenPipe => {},
+    //error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
+    //else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    //};
 
-    writer.writeAll(block.items) catch |err| return switch (err) {
-        error.BrokenPipe => {},
-        error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
-        else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
-    };
+    //writer.writeAll(block.items) catch |err| return switch (err) {
+    //error.BrokenPipe => {},
+    //error.Unexpected => logger.unexpected("Unknown error has occurred while creating this archive", .{}),
+    //else => |e| return logger.errprint(e, "Unexpected error has occurred while creating this archive", .{}),
+    //};
 
     //if (fatal) {
     //return error.Fatal;
     //}
+}
+
+const Walker = struct {
+    inner: ?fs.Dir.Walker = null,
+
+    files: []const []const u8,
+    idx: usize = 0,
+
+    allocator: Allocator,
+
+    fn deinit(self: *Walker) void {
+        if (self.inner) |*walker| {
+            walker.stack.items[0].iter.dir.close();
+            walker.deinit();
+        }
+
+        self.* = undefined;
+    }
+
+    const Path = struct {
+        first: []const u8,
+        second: []const u8,
+
+        fn seperator(self: Path) []const u8 {
+            if (self.first.len > 0) {
+                const last_c = self.first[self.first.len - 1];
+                if (last_c == path.sep_posix or last_c == path.sep_posix) {
+                    return "";
+                }
+            }
+            return path.sep_str;
+        }
+    };
+
+    fn next(self: *Walker) Allocator.Error!?Path {
+        if (self.inner != null) {
+            if (try innerNext(self)) |n| {
+                return n;
+            }
+        }
+
+        while (self.idx != self.files.len) {
+            const file_path = self.files[self.idx];
+            {
+                defer self.idx += 1;
+                const file_stat = handled.statFile(file_path, .{}) catch continue;
+
+                if (file_stat.kind != .directory) return .{
+                    .first = file_path,
+                    .second = "",
+                };
+            }
+
+            const walk_dir = fs.cwd().openDir(file_path, .{ .iterate = true }) catch |err| {
+                logger.println("{s}: Cannot open: {s}", .{ file_path, errors.stringify(err) });
+                continue;
+            };
+
+            self.inner = try walk_dir.walk(self.allocator);
+            if (try innerNext(self)) |n| {
+                return n;
+            }
+        }
+
+        return null;
+    }
+
+    fn innerNext(self: *Walker) Allocator.Error!?Path {
+        while (true) {
+            const mb = self.inner.?.next() catch |err| switch (err) {
+                error.OutOfMemory => |e| return e,
+                else => |e| {
+                    const file_path = Path{
+                        .first = self.files[self.idx - 1],
+                        .second = self.inner.?.name_buffer.items,
+                    };
+
+                    logger.println("{s}{s}{s}: Cannot open: {s}", .{ file_path.first, file_path.seperator(), file_path.second, errors.stringify(e) });
+                    continue;
+                },
+            };
+            const entry = mb orelse {
+                self.inner.?.deinit();
+                self.inner = null;
+
+                return null;
+            };
+            if (entry.kind == .directory) continue;
+
+            return .{
+                .first = self.files[self.idx - 1],
+                .second = entry.path,
+            };
+        }
+    }
+};
+
+fn walkFiles(allocator: Allocator, files: []const []const u8) Walker {
+    return .{
+        .allocator = allocator,
+        .files = files,
+    };
 }
 
 const AddFileOptions = struct {
@@ -192,17 +351,17 @@ const AddFileOptions = struct {
     entry_by_checksum: *std.AutoHashMap(u64, *const ouput.Entry),
 };
 
-fn addFileToArchive(sub_path: []const u8, stream: anytype, options: AddFileOptions) !void {
-    const file_stat = try options.dir.statFile(sub_path);
+fn addFileToArchive(sub_path: []const u8, stream: anytype, options: AddFileOptions) (error{IsDir} || HandleError)!void {
+    const file_stat = options.dir.statFile(sub_path) catch |err| return logger.errprint(err, "{s}: Cannot stat", .{sub_path});
     if (file_stat.kind == .directory) {
         return error.IsDir;
     }
 
     if (file_stat.size > wad.max_file_size) {
-        return error.FileTooBig;
+        return logger.errprint(error.FileTooBig, "{s}: Cannot open", .{sub_path});
     }
 
-    const file = try options.dir.openFile(sub_path, .{});
+    const file = options.dir.openFile(sub_path, .{}) catch |err| return logger.errprint(err.FileTooBig, "{s}: Cannot open", .{sub_path});
     defer file.close();
 
     const decompressed_size: u32 = @intCast(file_stat.size);
@@ -212,14 +371,13 @@ fn addFileToArchive(sub_path: []const u8, stream: anytype, options: AddFileOptio
 
     var compressed_size: u32 = 0;
     while (true) {
-        const amt = try file.read(&buffer);
+        const amt = file.read(&buffer) catch |err| logger.errprint(err, "{s}: Cannot read", .{sub_path});
         if (amt == 0) break;
         compressed_size += @intCast(try stream.write(buffer[0..amt]));
     }
 
     const entry_checksum = xxhash.XxHash3(64).hash(options.data.items[options.data.items.len - compressed_size ..]);
     var entry = ouput.Entry.init(.{
-        //.path = sub_path, // path is always converted to lowercase by Entry, we're not handling prefix
         .compressed_size = compressed_size,
         .decompressed_size = decompressed_size,
         .type = .zstd,
@@ -227,22 +385,16 @@ fn addFileToArchive(sub_path: []const u8, stream: anytype, options: AddFileOptio
     });
 
     {
+        // todo: fix src//////////////////////////////////////
         var path_hash = xxhash.XxHash64.init(0);
         if (options.prefix.len > 0) {
-            for (options.prefix) |c| {
-                var char = [_]u8{std.ascii.toLower(c)};
-                path_hash.update(&char);
-            }
+            path_hash.update(options.prefix);
             if (options.prefix[options.prefix.len - 1] != '/') {
                 path_hash.update("/");
             }
         }
 
-        for (sub_path) |c| {
-            var char = [_]u8{std.ascii.toLower(c)};
-            path_hash.update(&char);
-        }
-
+        path_hash.update(sub_path);
         entry.raw_entry.hash = path_hash.final();
     }
 

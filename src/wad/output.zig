@@ -78,13 +78,7 @@ pub const Entry = extern struct {
     }
 
     pub inline fn setPath(self: *Entry, path: []const u8) void {
-        var hash = xxhash.XxHash64.init(0);
-        // todo: idk simd somehow mb possible, prob already in simd we need to check compiled code
-        for (path) |c| {
-            var byte = [_]u8{ascii.toLower(c)};
-            hash.update(&byte);
-        }
-        self.raw_entry.hash = hash.final();
+        self.raw_entry.hash = xxhash.XxHash64.hash(0, path);
     }
 
     pub inline fn setOffset(self: *Entry, offset: u32) void {
