@@ -89,15 +89,40 @@ pub const Entry = extern struct {
         self.raw_entry.compressed_size = size;
     }
 
+    pub inline fn setDecompressedSize(self: *Entry, size: u32) void {
+        self.raw_entry.decompressed_size = size;
+    }
+
     pub inline fn setType(self: *Entry, entry_type: toc.EntryType) void {
         self.raw_entry.byte = (self.raw_entry.byte & 0xF0) | @intFromEnum(entry_type);
+    }
+
+    pub inline fn setChecksum(self: *Entry, checksum: u64) void {
+        self.raw_entry.checksum = checksum;
+    }
+
+    pub inline fn getCompressedSize(self: *const Entry) u32 {
+        return self.raw_entry.compressed_size;
+    }
+
+    pub inline fn getDecompressedSize(self: *const Entry) u32 {
+        return self.raw_entry.decompressed_size;
     }
 
     pub inline fn getType(self: *const Entry) toc.EntryType {
         return std.meta.intToEnum(toc.EntryType, self.raw_entry.byte & 0x0F) catch unreachable;
     }
 
+    pub inline fn getOffset(self: *const Entry) u32 {
+        return self.raw_entry.offset;
+    }
+
+    pub inline fn getChecksum(self: *const Entry) u64 {
+        return self.raw_entry.checksum;
+    }
+
     pub inline fn setDuplicate(self: *Entry) void {
-        self.raw_entry.duplicate = true;
+        _ = self;
+        @panic("not such thing");
     }
 };
